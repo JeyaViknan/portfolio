@@ -1,0 +1,188 @@
+---
+const samples = {
+  northwind: `Northwind Systems · Online test shortlist
+S.No  Neo ID     Branch
+1     4HD8W2LQ   CSE
+2     M3PZ7RKE   ECE
+3     9TJX4C6N   CSE
+4     7QK2M9XA   CSE
+5     B2LW8VYD   IT
+6     Q6RM3HZT   CSE`,
+  contoso: `Contoso · Interview shortlist
+S.No  Reg. No.    Branch
+1     23ABC0017   CSE
+2     23ABC0105   CSE
+3     23DEF0331   ECE
+4     23ABC0288   IT`,
+  fabrikam: `Fabrikam · Interview shortlist
+S.No  Application No.   Branch
+1     FBK-20391         CSE
+2     FBK-20418         ECE
+3     FBK-20457         CSE`,
+};
+---
+<div class="shortlist" data-shortlist>
+  <div class="controls" role="group" aria-label="Sample shortlists">
+    <button type="button" class="btn" data-sample="northwind" aria-pressed="true">Northwind · test</button>
+    <button type="button" class="btn" data-sample="contoso" aria-pressed="false">Contoso · interview</button>
+    <button type="button" class="btn" data-sample="fabrikam" aria-pressed="false">Fabrikam · interview</button>
+  </div>
+  <div class="layout">
+    <label class="field">
+      <span class="label">The file, as it arrived</span>
+      <textarea class="mono" rows="9" spellcheck="false" data-input data-lenis-prevent>{samples.northwind}</textarea>
+    </label>
+    <div class="answer" aria-live="polite">
+      <p class="label">nankiv says</p>
+      <p class="result" data-result>You’re in.</p>
+      <p class="reason" data-reason></p>
+      <pre class="proof mono" data-proof></pre>
+    </div>
+  </div>
+  <script type="application/json" data-samples set:html={JSON.stringify(samples)} />
+</div>
+
+<script>
+  const NEO = '7QK2M9XA';
+  const REG = '23ABC0042';
+  const isNeo = (t: string) => /^[A-Z0-9]{8}$/.test(t) && /[A-Z]/.test(t) && /\d/.test(t);
+  const isReg = (t: string) => /^\d{2}[A-Z]{3}\d{4}$/.test(t);
+
+  document.querySelectorAll<HTMLElement>('[data-shortlist]').forEach((root) => {
+    const input = root.querySelector<HTMLTextAreaElement>('[data-input]')!;
+    const result = root.querySelector<HTMLElement>('[data-result]')!;
+    const reason = root.querySelector<HTMLElement>('[data-reason]')!;
+    const proof = root.querySelector<HTMLElement>('[data-proof]')!;
+    const samples = JSON.parse(root.querySelector('[data-samples]')!.textContent || '{}') as Record<string, string>;
+    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-sample]'));
+
+    function answer() {
+      const lines = input.value.split(/\r?\n/);
+      const tokenLines = lines.map((l) => l.toUpperCase().split(/[^A-Z0-9-]+/).filter(Boolean));
+      const hit = tokenLines.findIndex((ts) => ts.includes(NEO) || ts.includes(REG));
+      const all = tokenLines.flat();
+      proof.textContent = '';
+      if (hit >= 0) {
+        const by = tokenLines[hit].includes(NEO) ? 'Neo ID' : 'registration number';
+        result.textContent = 'You’re in.';
+        result.className = 'result in';
+        reason.textContent = `Matched by ${by} on line ${hit + 1}. Here it is in the file:`;
+        const from = Math.max(0, hit - 1);
+        proof.textContent = lines
+          .slice(from, hit + 2)
+          .map((l, i) => `${from + i === hit ? '→' : ' '} ${String(from + i + 1).padStart(2)}  ${l}`)
+          .join('\n');
+        return;
+      }
+      const neoCount = all.filter(isNeo).length;
+      const regCount = all.filter(isReg).length;
+      if (neoCount + regCount > 0) {
+        result.textContent = 'Not this time.';
+        result.className = 'result out';
+        reason.textContent = `The list identifies students by ${neoCount >= regCount ? 'Neo ID' : 'registration number'}, which nankiv knows for you, and yours isn’t among the ${Math.max(neoCount, regCount)} listed.`;
+        return;
+      }
+      result.textContent = 'Can’t tell.';
+      result.className = 'result unknown';
+      reason.textContent = input.value.trim()
+        ? 'This file identifies people in a way nankiv can’t match you on, so it won’t say no.'
+        : 'Paste a shortlist to check it.';
+    }
+
+    buttons.forEach((b) =>
+      b.addEventListener('click', () => {
+        input.value = samples[b.dataset.sample!];
+        buttons.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        answer();
+      })
+    );
+    input.addEventListener('input', () => {
+      buttons.forEach((x) => x.setAttribute('aria-pressed', 'false'));
+      answer();
+    });
+    answer();
+  });
+</script>
+
+<style>
+  .shortlist .controls {
+    margin-bottom: var(--s5);
+  }
+
+  .shortlist .btn[aria-pressed='true'] {
+    background: var(--ink);
+    color: var(--paper);
+    border-color: var(--ink);
+  }
+
+  .layout {
+    display: grid;
+    gap: var(--s6);
+  }
+
+  @media (min-width: 56rem) {
+    .layout {
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    }
+  }
+
+  .field {
+    display: grid;
+    gap: var(--s3);
+  }
+
+  textarea {
+    width: 100%;
+    resize: vertical;
+    padding: var(--s3) var(--s4);
+    font-size: 0.74rem;
+    line-height: 1.6;
+    color: var(--ink);
+    background: var(--paper-2);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+  }
+
+  textarea:focus-visible {
+    outline-offset: 1px;
+  }
+
+  .answer .label {
+    margin-bottom: var(--s3);
+  }
+
+  .result {
+    font-size: clamp(1.8rem, 1.2rem + 2vw, 2.6rem);
+    font-weight: 380;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+
+  .result.unknown {
+    font-style: italic;
+  }
+
+  .result.out {
+    color: var(--ink-2);
+  }
+
+  .reason {
+    margin-top: var(--s3);
+    font-size: var(--t-small);
+    color: var(--ink-2);
+    max-width: 30rem;
+  }
+
+  .proof {
+    margin: var(--s3) 0 0;
+    font-size: 0.72rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--ink-2);
+  }
+
+  .proof:empty {
+    display: none;
+  }
+</style>

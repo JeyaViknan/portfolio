@@ -1,0 +1,390 @@
+---
+const N = 50;
+---
+<div class="transfers" data-transfers>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Implementation">
+      <button type="button" data-mode="naive" aria-pressed="true">Balance column</button>
+      <button type="button" data-mode="penny" aria-pressed="false">Penny’s ledger</button>
+    </div>
+    <button type="button" class="btn primary" data-go>Send 50 transfers</button>
+  </div>
+
+  <p class="mode-note" data-mode-note>Each transfer reads A’s balance, checks it, then writes it back. Nothing stops two transfers reading the same balance.</p>
+
+  <div class="layout">
+    <div>
+      <p class="label">Transfers, ₹100 each, A → B</p>
+      <ol class="grid" data-grid aria-hidden="true">
+        {Array.from({ length: N }, (_, i) => <li title={`T${i + 1}`}></li>)}
+      </ol>
+      <p class="key mono" aria-hidden="true">
+        <i class="ok"></i> succeeded <i class="over"></i> should have been refused <i class="no"></i> refused <i class="wait"></i> waiting for a lock
+      </p>
+    </div>
+    <div>
+      <p class="label">Balances</p>
+      <table class="balances mono">
+        <tbody>
+          <tr><th scope="row">Cash vault</th><td data-b-vault>−₹1,000</td></tr>
+          <tr><th scope="row">Account A</th><td data-b-a>₹1,000</td></tr>
+          <tr><th scope="row">Account B</th><td data-b-b>₹0</td></tr>
+          <tr class="sum"><th scope="row">Sum of all balances</th><td data-b-sum>₹0</td></tr>
+        </tbody>
+      </table>
+      <p class="label journal-label" data-journal-label>Journal</p>
+      <ol class="journal mono" data-journal></ol>
+    </div>
+  </div>
+
+  <dl class="readouts">
+    <div class="readout"><dt>Succeeded</dt><dd data-r-ok>0 / 50</dd></div>
+    <div class="readout"><dt>A can afford</dt><dd>10</dd></div>
+    <div class="readout"><dt>Lost updates</dt><dd data-r-lost>0</dd></div>
+  </dl>
+  <p class="verdict" data-verdict aria-live="polite">A holds ₹1,000, so exactly ten of these should succeed.</p>
+</div>
+
+<script>
+  type Mode = 'naive' | 'penny';
+  type State = 'idle' | 'run' | 'wait' | 'ok' | 'over' | 'no';
+  interface T {
+    id: number;
+    start: number;
+    pc: number;
+    a?: number;
+    aVer?: number;
+    b?: number;
+    state: State;
+  }
+
+  const N = 50;
+  const AMOUNT = 100;
+  const OPENING = 1000;
+  const inr = (v: number) => `${v < 0 ? '−' : ''}₹${Math.abs(v).toLocaleString('en-IN')}`;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+
+  document.querySelectorAll<HTMLElement>('[data-transfers]').forEach((root) => {
+    const $ = <E extends Element>(s: string) => root.querySelector<E>(s)!;
+    const cells = Array.from(root.querySelectorAll<HTMLElement>('[data-grid] li'));
+    const modeBtns = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-mode]'));
+    const go = $<HTMLButtonElement>('[data-go]');
+    const note = $<HTMLElement>('[data-mode-note]');
+    const journalEl = $<HTMLElement>('[data-journal]');
+    const journalLabel = $<HTMLElement>('[data-journal-label]');
+    const out = {
+      vault: $<HTMLElement>('[data-b-vault]'),
+      a: $<HTMLElement>('[data-b-a]'),
+      b: $<HTMLElement>('[data-b-b]'),
+      sum: $<HTMLElement>('[data-b-sum]'),
+      ok: $<HTMLElement>('[data-r-ok]'),
+      lost: $<HTMLElement>('[data-r-lost]'),
+    };
+    const verdict = $<HTMLElement>('[data-verdict]');
+
+    let mode: Mode = 'naive';
+    let ts: T[] = [];
+    let tick = 0;
+    let raf = 0;
+    // Naive state: mutable columns.
+    let A = OPENING, B = 0, aVer = 0, lost = 0, firstLost = '';
+    // Penny state: postings and a lock table.
+    let postings: { n: number; side: 'DEBIT' | 'CREDIT'; acct: string; t: number }[] = [];
+    let lockA: number | null = null;
+    let lockB: number | null = null;
+    let succeeded = 0;
+
+    const notes: Record<Mode, string> = {
+      naive: 'Each transfer reads A’s balance, checks it, then writes it back. Nothing stops two transfers reading the same balance.',
+      penny: 'Each transfer locks A then B, in id order, re-reads the balance from the journal, and posts a debit and a credit together.',
+    };
+
+    function balances() {
+      if (mode === 'naive') return { vault: -OPENING, a: A, b: B };
+      let a = OPENING, b = 0;
+      for (const p of postings) {
+        const d = p.side === 'CREDIT' ? AMOUNT : -AMOUNT;
+        if (p.acct === 'A') a += d;
+        else b += d;
+      }
+      return { vault: -OPENING, a, b };
+    }
+
+    function reset() {
+      cancelAnimationFrame(raf);
+      raf = 0;
+      ts = Array.from({ length: N }, (_, i) => ({ id: i + 1, start: Math.floor(Math.random() * 90), pc: 0, state: 'idle' as State }));
+      tick = 0;
+      A = OPENING; B = 0; aVer = 0; lost = 0; firstLost = '';
+      postings = [];
+      lockA = lockB = null;
+      succeeded = 0;
+      journalLabel.textContent = mode === 'naive' ? 'Balance column writes' : 'Journal (append-only)';
+      journalEl.innerHTML = '';
+      render(false);
+    }
+
+    function log(text: string) {
+      const li = document.createElement('li');
+      li.textContent = text;
+      journalEl.prepend(li);
+      while (journalEl.children.length > 5) journalEl.lastElementChild!.remove();
+    }
+
+    function finish(t: T, ok: boolean) {
+      if (!ok) t.state = 'no';
+      else {
+        succeeded++;
+        t.state = succeeded > 10 ? 'over' : 'ok';
+      }
+      t.pc = -1;
+    }
+
+    // One step of transfer t. Returns false if it could not progress (blocked).
+    function advance(t: T): boolean {
+      if (mode === 'naive') {
+        switch (t.pc) {
+          case 0: t.a = A; t.aVer = aVer; t.state = 'run'; t.pc++; return true;
+          case 1: if (t.a! < AMOUNT) { finish(t, false); return true; } t.pc++; return true;
+          case 2:
+            if (t.aVer !== aVer) {
+              lost++;
+              if (!firstLost) firstLost = `The first lost update: T${t.id} read A as ${inr(t.a!)}, another transfer debited A, and then T${t.id}’s write erased that debit.`;
+            }
+            A = t.a! - AMOUNT; aVer++; t.pc++;
+            log(`T${String(t.id).padStart(2, '0')} SET A = ${inr(A)}`);
+            return true;
+          case 3: t.b = B; t.pc++; return true;
+          case 4: B = t.b! + AMOUNT; t.pc++; finish(t, true); return true;
+        }
+        return false;
+      }
+      switch (t.pc) {
+        case 0:
+          if (lockA !== null && lockA !== t.id) { t.state = 'wait'; return false; }
+          lockA = t.id; t.state = 'run'; t.pc++; return true;
+        case 1:
+          if (lockB !== null && lockB !== t.id) { t.state = 'wait'; return false; }
+          lockB = t.id; t.pc++; return true;
+        case 2: t.a = balances().a; t.pc++; return true;
+        case 3:
+          if (t.a! < AMOUNT) { lockA = lockB = null; finish(t, false); return true; }
+          t.pc++; return true;
+        case 4: {
+          const n = postings.length + 1;
+          postings.push({ n, side: 'DEBIT', acct: 'A', t: t.id }, { n: n + 1, side: 'CREDIT', acct: 'B', t: t.id });
+          log(`#${String(n).padStart(4, '0')} DEBIT A · #${String(n + 1).padStart(4, '0')} CREDIT B · T${String(t.id).padStart(2, '0')}`);
+          t.pc++; return true;
+        }
+        case 5: lockA = lockB = null; finish(t, true); return true;
+      }
+      return false;
+    }
+
+    function stepAll() {
+      tick++;
+      for (const t of ts) {
+        if (t.pc < 0 || t.start > tick) continue;
+        if (Math.random() < 0.4) advance(t);
+      }
+      return ts.every((t) => t.pc < 0);
+    }
+
+    function render(done: boolean) {
+      ts.forEach((t, i) => (cells[i].className = t.state === 'idle' ? '' : t.state));
+      const bal = balances();
+      const sum = bal.vault + bal.a + bal.b;
+      out.vault.textContent = inr(bal.vault);
+      out.a.textContent = inr(bal.a);
+      out.b.textContent = inr(bal.b);
+      out.sum.textContent = sum === 0 ? '₹0' : `${sum > 0 ? '+' : ''}${inr(sum)}`;
+      out.sum.classList.toggle('bad', sum !== 0);
+      out.a.classList.toggle('bad', mode === 'naive' && succeeded > 10);
+      out.ok.textContent = `${succeeded} / ${N}`;
+      out.ok.classList.toggle('bad', succeeded > 10);
+      out.lost.textContent = String(lost);
+      out.lost.classList.toggle('bad', lost > 0);
+      if (!done) return;
+      if (mode === 'naive') {
+        const created = sum;
+        verdict.innerHTML =
+          `<strong class="bad">${succeeded} transfers went through</strong> against a balance that covers ten. ` +
+          (created !== 0 ? `The balances now sum to ${created > 0 ? '+' : ''}${inr(created)}: money ${created > 0 ? 'appeared from nowhere' : 'vanished'}. ` : '') +
+          (firstLost ? firstLost : '');
+      } else {
+        verdict.innerHTML = `<strong>Exactly ${succeeded} succeeded</strong> and ${N - succeeded} were refused. The journal holds ${postings.length} postings, and the balances sum to ₹0.`;
+      }
+    }
+
+    function run() {
+      reset();
+      go.disabled = true;
+      modeBtns.forEach((b) => (b.disabled = true));
+      verdict.textContent = 'Running…';
+      if (reduce.matches) {
+        while (!stepAll());
+        complete();
+        return;
+      }
+      const frame = () => {
+        let done = false;
+        for (let i = 0; i < 3 && !done; i++) done = stepAll();
+        render(false);
+        if (done) complete();
+        else raf = requestAnimationFrame(frame);
+      };
+      raf = requestAnimationFrame(frame);
+    }
+
+    function complete() {
+      render(true);
+      go.disabled = false;
+      go.textContent = 'Send them again';
+      modeBtns.forEach((b) => (b.disabled = false));
+    }
+
+    go.addEventListener('click', run);
+    modeBtns.forEach((b) =>
+      b.addEventListener('click', () => {
+        mode = b.dataset.mode as Mode;
+        modeBtns.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        note.textContent = notes[mode];
+        go.textContent = 'Send 50 transfers';
+        reset();
+        verdict.textContent = 'A holds ₹1,000, so exactly ten of these should succeed.';
+      })
+    );
+
+    reset();
+  });
+</script>
+
+<style>
+  .transfers .controls {
+    margin-bottom: var(--s4);
+  }
+
+  .mode-note {
+    font-size: var(--t-small);
+    color: var(--ink-2);
+    max-width: 40rem;
+    margin-bottom: var(--s5);
+    min-height: 3em;
+  }
+
+  .layout {
+    display: grid;
+    gap: var(--s6);
+  }
+
+  @media (min-width: 52rem) {
+    .layout {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 20rem);
+    }
+  }
+
+  .layout .label {
+    margin-bottom: var(--s3);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+    gap: 5px;
+    max-width: 26rem;
+  }
+
+  .grid li,
+  .key i {
+    aspect-ratio: 1;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+    transition: background-color 120ms, border-color 120ms;
+  }
+
+  .grid li.run {
+    border-color: var(--ink);
+  }
+
+  .grid li.wait,
+  .key i.wait {
+    border-style: dashed;
+    border-color: var(--ink-2);
+  }
+
+  .grid li.ok,
+  .key i.ok {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .grid li.over,
+  .key i.over {
+    background: var(--signal);
+    border-color: var(--signal);
+  }
+
+  .grid li.no,
+  .key i.no {
+    background: linear-gradient(to top right, transparent calc(50% - 0.75px), var(--rule-strong) calc(50% - 0.75px), var(--rule-strong) calc(50% + 0.75px), transparent calc(50% + 0.75px));
+  }
+
+  .key {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s2);
+    margin-top: var(--s4);
+    color: var(--ink-3);
+  }
+
+  .key i {
+    display: inline-block;
+    width: 0.75rem;
+  }
+
+  .key i:not(:first-child) {
+    margin-left: var(--s3);
+  }
+
+  .balances {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .balances th,
+  .balances td {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--rule);
+    font-weight: 400;
+    text-align: left;
+  }
+
+  .balances td {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .balances .sum th,
+  .balances .sum td {
+    border-bottom: 0;
+    border-top: 1px solid var(--ink);
+    font-weight: 500;
+  }
+
+  .journal-label {
+    margin-top: var(--s5);
+  }
+
+  .journal {
+    display: grid;
+    gap: 0.2rem;
+    min-height: 7.5rem;
+    color: var(--ink-2);
+    font-size: 0.72rem;
+  }
+
+  .journal :global(li:first-child) {
+    color: var(--ink);
+  }
+</style>

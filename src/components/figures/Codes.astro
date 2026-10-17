@@ -1,0 +1,301 @@
+<div class="codes" data-codes>
+  <div class="layout">
+    <div class="projector">
+      <p class="label">Projector · rotates every 400 ms</p>
+      <p class="payload mono" data-payload aria-hidden="true">
+        <span class="part"><b data-p-sid>········</b><small>session</small></span><span class="dot">.</span><span class="part"><b data-p-slot>········</b><small>slot</small></span><span class="dot">.</span><span class="part"><b data-p-sig>················</b><small>signature</small></span>
+      </p>
+      <div class="slotbar" aria-hidden="true"><i data-slotbar></i></div>
+      <p class="server mono">Server clock <span data-server-time>--:--:--.-</span> · slot <span data-server-slot>--------</span></p>
+    </div>
+
+    <div class="phone">
+      <p class="label">Your phone</p>
+      <p class="captured mono" data-captured>Nothing captured yet.</p>
+      <p class="phone-clock mono">Phone clock <span data-phone-time>--:--:--</span></p>
+      <div class="controls">
+        <button type="button" class="btn primary" data-capture>Capture this frame</button>
+        <button type="button" class="btn" data-submit disabled>Submit it</button>
+        <button type="button" class="btn" data-clock aria-pressed="false">Set phone clock back 10 min</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="verdict" data-verdict aria-live="polite">Capture a frame, then submit it now or a few seconds later.</p>
+</div>
+
+<script>
+  const SLOT_MS = 4000;
+  const SKEW_MS = 500;
+  const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+
+  function base32(bytes: Uint8Array, chars: number) {
+    let bits = 0, value = 0, out = '';
+    for (const b of bytes) {
+      value = (value << 8) | b;
+      bits += 8;
+      while (bits >= 5 && out.length < chars) {
+        out += B32[(value >>> (bits - 5)) & 31];
+        bits -= 5;
+      }
+    }
+    return out;
+  }
+  const randomB32 = (n: number) => base32(crypto.getRandomValues(new Uint8Array(Math.ceil((n * 5) / 8))), n);
+  const slotOf = (t: number) => Math.floor(t / SLOT_MS);
+  const slotStr = (s: number) => s.toString(36).toUpperCase().padStart(8, '0');
+  const clock = (t: number, tenths = true) => {
+    const d = new Date(t);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${tenths ? '.' + Math.floor(d.getMilliseconds() / 100) : ''}`;
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-codes]').forEach(async (root) => {
+    const $ = <E extends Element>(s: string) => root.querySelector<E>(s)!;
+    const el = {
+      sid: $<HTMLElement>('[data-p-sid]'),
+      slot: $<HTMLElement>('[data-p-slot]'),
+      sig: $<HTMLElement>('[data-p-sig]'),
+      bar: $<HTMLElement>('[data-slotbar]'),
+      serverTime: $<HTMLElement>('[data-server-time]'),
+      serverSlot: $<HTMLElement>('[data-server-slot]'),
+      captured: $<HTMLElement>('[data-captured]'),
+      phoneTime: $<HTMLElement>('[data-phone-time]'),
+      capture: $<HTMLButtonElement>('[data-capture]'),
+      submit: $<HTMLButtonElement>('[data-submit]'),
+      clockBtn: $<HTMLButtonElement>('[data-clock]'),
+      verdict: $<HTMLElement>('[data-verdict]'),
+    };
+
+    if (!crypto?.subtle) {
+      el.verdict.textContent = 'This model needs the Web Crypto API, which your browser does not provide here.';
+      el.capture.disabled = true;
+      return;
+    }
+
+    // The stand-in server. The key never leaves this closure.
+    const key = await crypto.subtle.importKey(
+      'raw',
+      crypto.getRandomValues(new Uint8Array(32)),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    const sid = randomB32(8);
+    const sign = async (slot: string) =>
+      base32(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${sid}:${slot}`))).slice(0, 10), 16);
+
+    const server = {
+      async batch(slot: number) {
+        return { slot: slotStr(slot), sig: await sign(slotStr(slot)) };
+      },
+      async validate(payload: string) {
+        const now = Date.now();
+        const [psid, pslot, psig] = payload.split('.');
+        if (psid !== sid || !pslot || !psig) return { ok: false, reason: 'unknown session' } as const;
+        const expected = await sign(pslot);
+        if (expected !== psig) return { ok: false, reason: 'decoy' } as const;
+        const slotNum = parseInt(pslot, 36);
+        const start = slotNum * SLOT_MS;
+        const end = start + SLOT_MS;
+        if (now < start - SKEW_MS || now > end + SKEW_MS) return { ok: false, reason: 'expired', late: now - end } as const;
+        return { ok: true } as const;
+      },
+    };
+
+    let signed: { slot: string; sig: string } | null = null;
+    let current = '';
+    let captured: { payload: string; at: number } | null = null;
+    let phoneOffset = 0;
+    let visible = false;
+    let timer = 0;
+    let used = new Set<string>();
+
+    async function rotate() {
+      const now = Date.now();
+      const slot = slotOf(now);
+      if (!signed || signed.slot !== slotStr(slot)) signed = await server.batch(slot);
+      // About a third of frames carry the valid code; the rest are decoys of the same shape.
+      const sig = Math.random() < 0.34 ? signed.sig : randomB32(16);
+      current = `${sid}.${signed.slot}.${sig}`;
+      el.sid.textContent = sid;
+      el.slot.textContent = signed.slot;
+      el.sig.textContent = sig;
+    }
+
+    function tickClock() {
+      const now = Date.now();
+      el.serverTime.textContent = clock(now);
+      el.serverSlot.textContent = slotStr(slotOf(now));
+      el.phoneTime.textContent = clock(now + phoneOffset, false);
+      el.bar.style.transform = `scaleX(${(now % SLOT_MS) / SLOT_MS})`;
+    }
+
+    function loop() {
+      clearTimeout(timer);
+      if (!visible || document.hidden) return;
+      rotate();
+      timer = window.setTimeout(loop, reduce.matches ? 1200 : 400);
+    }
+
+    let raf = 0;
+    function clockLoop() {
+      tickClock();
+      raf = visible && !document.hidden ? requestAnimationFrame(clockLoop) : 0;
+    }
+
+    new IntersectionObserver((entries) => {
+      visible = entries[0].isIntersecting;
+      if (visible) {
+        loop();
+        if (!raf) raf = requestAnimationFrame(clockLoop);
+      }
+    }).observe(root);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && visible) {
+        loop();
+        if (!raf) raf = requestAnimationFrame(clockLoop);
+      }
+    });
+
+    el.capture.addEventListener('click', async () => {
+      if (!current) await rotate();
+      captured = { payload: current, at: Date.now() };
+      el.captured.textContent = current;
+      el.submit.disabled = false;
+      el.verdict.textContent = `Captured at ${clock(captured.at)}. Submit it now, or wait a few seconds first.`;
+    });
+
+    el.submit.addEventListener('click', async () => {
+      if (!captured) return;
+      const age = ((Date.now() - captured.at) / 1000).toFixed(1);
+      const res = await server.validate(captured.payload);
+      const clockNote = phoneOffset ? ' Your phone’s clock was ignored; only the server’s counts.' : '';
+      if (res.ok) {
+        if (used.has(captured.payload)) {
+          el.verdict.innerHTML = `<strong>Already used.</strong> This device has spent its token for that code.${clockNote}`;
+        } else {
+          used.add(captured.payload);
+          el.verdict.innerHTML = `<strong>Accepted</strong>, ${age} s after capture. The server issues a single-use token bound to this device, valid for 120 s. The next step would be the face match.${clockNote}`;
+        }
+      } else if (res.reason === 'decoy') {
+        el.verdict.innerHTML = `<span class="bad"><strong>Rejected: the signature doesn’t verify.</strong></span> That frame was a decoy. It looked exactly like the real code.${clockNote}`;
+      } else if (res.reason === 'expired') {
+        el.verdict.innerHTML = `<span class="bad"><strong>Rejected: expired.</strong></span> The code was genuine, but its 4-second slot ended ${(res.late / 1000).toFixed(1)} s ago by the server’s clock. A screenshot sent to a friend arrives too late.${clockNote}`;
+      } else {
+        el.verdict.innerHTML = `<span class="bad"><strong>Rejected.</strong></span>`;
+      }
+    });
+
+    el.clockBtn.addEventListener('click', () => {
+      phoneOffset = phoneOffset ? 0 : -10 * 60 * 1000;
+      el.clockBtn.setAttribute('aria-pressed', String(Boolean(phoneOffset)));
+      el.clockBtn.textContent = phoneOffset ? 'Restore phone clock' : 'Set phone clock back 10 min';
+      tickClock();
+    });
+
+    tickClock();
+    await rotate();
+  });
+</script>
+
+<style>
+  .layout {
+    display: grid;
+    gap: var(--s6);
+  }
+
+  @media (min-width: 56rem) {
+    .layout {
+      grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    }
+  }
+
+  .label {
+    margin-bottom: var(--s3);
+  }
+
+  .projector {
+    padding: var(--s5);
+    background: var(--ink);
+    color: var(--paper);
+    border-radius: 3px;
+  }
+
+  .projector .label {
+    color: color-mix(in srgb, var(--paper) 65%, transparent);
+  }
+
+  .payload {
+    display: flex;
+    flex-wrap: wrap;
+    margin-top: var(--s4);
+    font-size: clamp(0.8rem, 0.5rem + 1.35vw, 1.35rem);
+    letter-spacing: 0.03em;
+  }
+
+  .part {
+    display: inline-grid;
+    gap: var(--s1);
+  }
+
+  .part b {
+    font-weight: 400;
+  }
+
+  .part small {
+    font-size: 0.6rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--paper) 55%, transparent);
+  }
+
+  .dot {
+    opacity: 0.5;
+    padding-inline: 0.05em;
+  }
+
+  .slotbar {
+    margin-top: var(--s5);
+    height: 2px;
+    background: color-mix(in srgb, var(--paper) 18%, transparent);
+    overflow: hidden;
+  }
+
+  .slotbar i {
+    display: block;
+    height: 100%;
+    background: var(--paper);
+    transform-origin: left;
+    transform: scaleX(0);
+  }
+
+  .server {
+    margin-top: var(--s3);
+    font-size: 0.7rem;
+    color: color-mix(in srgb, var(--paper) 70%, transparent);
+  }
+
+  .phone {
+    display: grid;
+    align-content: start;
+    gap: var(--s3);
+  }
+
+  .phone .label {
+    margin-bottom: 0;
+  }
+
+  .captured {
+    padding: var(--s3) var(--s4);
+    border: 1px solid var(--rule-strong);
+    border-radius: 3px;
+    min-height: 2.75rem;
+    overflow-wrap: anywhere;
+  }
+
+  .phone-clock {
+    color: var(--ink-3);
+  }
+</style>

@@ -1,0 +1,601 @@
+---
+import { lines, stations, work, route, type Station } from '../data/network';
+import { claims } from '../data/content';
+
+type Layout = 'wide' | 'tall';
+// Visible window of each layout: x, y, width, height.
+const dims: Record<Layout, [number, number, number, number]> = { wide: [70, 48, 1080, 530], tall: [0, 10, 390, 715] };
+
+// Polyline with rounded corners, so bends read like a drawn transit line.
+function rounded(points: [number, number][], r = 26): string {
+  if (points.length < 3) return `M${points.map((p) => p.join(' ')).join(' L')}`;
+  let d = `M${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [x0, y0] = points[i - 1];
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[i + 1];
+    const l1 = Math.hypot(x1 - x0, y1 - y0);
+    const l2 = Math.hypot(x2 - x1, y2 - y1);
+    const k = Math.min(r, l1 / 2, l2 / 2);
+    const ax = x1 - ((x1 - x0) / l1) * k;
+    const ay = y1 - ((y1 - y0) / l1) * k;
+    const bx = x1 + ((x2 - x1) / l2) * k;
+    const by = y1 + ((y2 - y1) / l2) * k;
+    d += ` L${ax.toFixed(1)} ${ay.toFixed(1)} Q${x1} ${y1} ${bx.toFixed(1)} ${by.toFixed(1)}`;
+  }
+  const last = points[points.length - 1];
+  return `${d} L${last[0]} ${last[1]}`;
+}
+
+const claimBySlug = Object.fromEntries(claims.map((c) => [c.slug, c]));
+const roleNote: Record<string, string | undefined> = {
+  nit: route.find((r) => r.id === 'role-nit')?.note,
+  viteach: route.find((r) => r.id === 'role-viteach')?.note,
+  hudo: route.find((r) => r.id === 'role-hudo')?.note,
+  next: 'Graduating in May 2027 and looking for where to go next.',
+};
+
+function cardData(s: Station) {
+  const c = claimBySlug[s.id];
+  const meta = work[s.id];
+  const primary = meta?.line ?? s.lines[0];
+  return {
+    'data-name': s.name,
+    'data-kind': s.kind,
+    'data-n': s.n ?? '',
+    'data-color': lines[primary].color,
+    'data-primary': primary,
+    'data-text': c ? c.statement : roleNote[s.id] ?? '',
+    'data-metric': meta ? meta.metrics[0].value : '',
+    'data-metric-label': meta ? meta.metrics[0].label : '',
+    'data-cta': s.future ? 'Get in touch' : c ? 'Open the project' : 'See it on the route',
+  };
+}
+
+const allLines = Object.values(lines);
+---
+<div class="network" data-network>
+  <div class="frame" data-frame>
+    {(['wide', 'tall'] as Layout[]).map((layout) => (
+      <svg
+        class={`map ${layout}`}
+        viewBox={dims[layout].join(' ')}
+        role="group"
+        aria-label="Network map of projects and roles, drawn as transit lines"
+        data-map
+      >
+        <g class="lines" aria-hidden="true">
+          {allLines.map((l) => (
+            <path class="line" data-line={l.id} d={rounded(l.path[layout])} stroke={l.color} />
+          ))}
+          {allLines.filter((l) => l.extension).map((l) => (
+            <path class="line extension" data-line={l.id} d={rounded(l.extension![layout])} stroke={l.color} />
+          ))}
+        </g>
+        <g class="stations">
+          {stations.map((s) => {
+            const [x, y] = s[layout];
+            const lab = s.label[layout];
+            const text = lab.text ?? [s.name];
+            const size = layout === 'wide' ? 15 : 12.5;
+            const interchange = s.lines.length > 1;
+            return (
+              <a
+                class:list={['station', { interchange, future: s.future }]}
+                href={s.href}
+                data-lines={s.lines.join(' ')}
+                aria-label={`${s.name}, ${s.kind}`}
+                {...cardData(s)}
+              >
+                <circle class="hit" cx={x} cy={y} r="26" />
+                <circle class="ring" cx={x} cy={y} r={interchange ? 19 : 15} />
+                <circle
+                  class="dot"
+                  cx={x}
+                  cy={y}
+                  r={interchange ? 11 : 7.5}
+                  stroke={interchange || s.future ? undefined : lines[s.lines[0]].color}
+                />
+                <text
+                  class="name"
+                  x={x + lab.dx}
+                  y={y + lab.dy - (text.length - 1) * (lab.dy < 0 ? size * 1.15 : 0)}
+                  text-anchor={lab.anchor}
+                  font-size={size}
+                >
+                  {text.map((t, i) => (
+                    <tspan x={x + lab.dx} dy={i === 0 ? 0 : size * 1.15}>{t}</tspan>
+                  ))}
+                </text>
+              </a>
+            );
+          })}
+        </g>
+      </svg>
+    ))}
+
+    <div class="card" data-card hidden aria-hidden="true">
+      <div class="card-head">
+        <span class="bullet" data-card-bullet></span>
+        <div>
+          <p class="card-name" data-card-name></p>
+          <p class="card-kind" data-card-kind></p>
+        </div>
+      </div>
+      <p class="card-text" data-card-text></p>
+      <p class="card-metric"><span data-card-metric></span> <small data-card-metric-label></small></p>
+      <p class="card-cta" data-card-cta></p>
+    </div>
+  </div>
+
+  <div class="legend" role="group" aria-label="Highlight one line on the map">
+    {allLines.map((l) => (
+      <button type="button" data-focus={l.id} aria-pressed="false" style={`--line: ${l.color}`}>
+        <i aria-hidden="true"></i>
+        <span>{l.name}</span>
+      </button>
+    ))}
+    <p class="hint mono">Hover a station to preview it. Click to open.</p>
+  </div>
+</div>
+
+<script>
+  import { gsap } from 'gsap';
+
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const canHover = matchMedia('(hover: hover)').matches;
+
+  document.querySelectorAll<HTMLElement>('[data-network]').forEach((root) => {
+    const frame = root.querySelector<HTMLElement>('[data-frame]')!;
+    const maps = Array.from(root.querySelectorAll<SVGSVGElement>('[data-map]'));
+    const card = root.querySelector<HTMLElement>('[data-card]')!;
+    const q = (s: string) => card.querySelector<HTMLElement>(s)!;
+    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-focus]'));
+    let pinned: string | null = null;
+
+    // Draw the visible map in. Each line draws from its first stop, and every
+    // station lights up at the moment its line actually reaches it.
+    const visible = maps.find((m) => getComputedStyle(m).display !== 'none');
+    maps.filter((m) => m !== visible || reduce).forEach((m) => m.classList.add('ready'));
+    if (visible && !reduce) {
+      const timeline = intro(visible);
+      new IntersectionObserver((entries, io) => {
+        if (entries[0].isIntersecting) {
+          timeline.play();
+          io.disconnect();
+        }
+      }, { threshold: 0.15 }).observe(visible);
+    }
+
+    function intro(svg: SVGSVGElement) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const EASE = 'power3.inOut';
+      const DRAW = 1.7;
+      const STAGGER = 0.2;
+      const ease = gsap.parseEase(EASE);
+      // Time t at which the eased draw has covered fraction f of the line.
+      const timeFor = (f: number) => {
+        let lo = 0;
+        let hi = 1;
+        for (let k = 0; k < 24; k++) {
+          const mid = (lo + hi) / 2;
+          if (ease(mid) < f) lo = mid;
+          else hi = mid;
+        }
+        return (lo + hi) / 2;
+      };
+
+      const tl = gsap.timeline({ paused: true, delay: 0.1 });
+      const paths = Array.from(svg.querySelectorAll<SVGPathElement>('.line:not(.extension)'));
+      const info = new Map<string, { start: number; pts: DOMPoint[] }>();
+      paths.forEach((p, i) => {
+        const len = p.getTotalLength();
+        const pts = Array.from({ length: 241 }, (_, k) => p.getPointAtLength((len * k) / 240));
+        info.set(p.dataset.line!, { start: i * STAGGER, pts });
+        p.style.strokeDasharray = `${len}`;
+        p.style.strokeDashoffset = `${len}`;
+        tl.to(p, { strokeDashoffset: 0, duration: DRAW, ease: EASE }, i * STAGGER);
+      });
+
+      const product = info.get('product');
+      const extensionAt = product ? product.start + DRAW - 0.15 : DRAW;
+      svg.querySelectorAll<SVGPathElement>('.extension').forEach((e) => {
+        gsap.set(e, { opacity: 0 });
+        tl.to(e, { opacity: 1, duration: 0.9, ease: 'power1.out' }, extensionAt);
+      });
+
+      svg.querySelectorAll<SVGAElement>('.station').forEach((st) => {
+        const dot = st.querySelector<SVGCircleElement>('.dot')!;
+        const name = st.querySelector<SVGTextElement>('.name')!;
+        const cx = Number(dot.getAttribute('cx'));
+        const cy = Number(dot.getAttribute('cy'));
+        const r = Number(dot.getAttribute('r'));
+
+        let at = Infinity;
+        if (st.classList.contains('future')) at = extensionAt + 0.6;
+        for (const id of st.dataset.lines!.split(' ')) {
+          const line = info.get(id);
+          if (!line || st.classList.contains('future')) continue;
+          let best = 0;
+          let bestD = Infinity;
+          line.pts.forEach((pt, k) => {
+            const d = (pt.x - cx) ** 2 + (pt.y - cy) ** 2;
+            if (d < bestD) {
+              bestD = d;
+              best = k;
+            }
+          });
+          at = Math.min(at, line.start + timeFor(best / 240) * DRAW);
+        }
+
+        gsap.set(dot, { attr: { r: 0 } });
+        gsap.set(name, { opacity: 0 });
+        tl.to(dot, { attr: { r }, duration: 0.7, ease: 'expo.out' }, at);
+        tl.to(name, { opacity: 1, duration: 0.8, ease: 'power2.out' }, at + 0.12);
+
+        if (!st.classList.contains('future')) {
+          const halo = document.createElementNS(NS, 'circle');
+          halo.setAttribute('class', 'halo');
+          halo.setAttribute('cx', String(cx));
+          halo.setAttribute('cy', String(cy));
+          halo.setAttribute('stroke', dot.getAttribute('stroke') ?? '#0e0e10');
+          halo.setAttribute('r', String(r));
+          halo.setAttribute('opacity', '0');
+          st.insertBefore(halo, dot);
+          tl.fromTo(
+            halo,
+            { attr: { r }, opacity: 0.5 },
+            { attr: { r: r + 18 }, opacity: 0, duration: 1.2, ease: 'power2.out', immediateRender: false, onComplete: () => halo.remove() },
+            at
+          );
+        }
+      });
+
+      tl.add(() => paths.forEach((p) => {
+        p.style.strokeDasharray = '';
+        p.style.strokeDashoffset = '';
+      }));
+      svg.classList.add('ready');
+      return tl;
+    }
+
+    function focusLine(id: string | null) {
+      maps.forEach((m) => (id ? m.setAttribute('data-focus', id) : m.removeAttribute('data-focus')));
+      buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.focus === pinned)));
+    }
+
+    buttons.forEach((b) => {
+      b.addEventListener('click', () => {
+        pinned = pinned === b.dataset.focus ? null : b.dataset.focus!;
+        focusLine(pinned);
+      });
+      b.addEventListener('mouseenter', () => focusLine(b.dataset.focus!));
+      b.addEventListener('mouseleave', () => focusLine(pinned));
+    });
+
+    function show(st: SVGAElement) {
+      const d = st.dataset;
+      const bullet = q('[data-card-bullet]');
+      bullet.textContent = d.n || '';
+      bullet.hidden = !d.n;
+      bullet.style.setProperty('--line', d.color!);
+      bullet.dataset.line = d.primary;
+      q('[data-card-name]').textContent = d.name!;
+      q('[data-card-kind]').textContent = d.kind!;
+      q('[data-card-text]').textContent = d.text!;
+      q('[data-card-metric]').textContent = d.metric!;
+      q('[data-card-metric-label]').textContent = d.metricLabel!;
+      q('.card-metric').hidden = !d.metric;
+      q('[data-card-cta]').textContent = `${d.cta} →`;
+      card.style.setProperty('--line', d.color!);
+      card.hidden = false;
+
+      const dot = st.querySelector('.dot')!.getBoundingClientRect();
+      const f = frame.getBoundingClientRect();
+      const cw = card.offsetWidth;
+      const ch = card.offsetHeight;
+      let x = dot.left - f.left + dot.width + 14;
+      let y = dot.top - f.top - ch / 2 + dot.height / 2;
+      if (x + cw > f.width - 8) x = dot.left - f.left - cw - 14;
+      y = Math.max(8, Math.min(y, f.height - ch - 8));
+      card.style.transform = `translate(${x}px, ${y}px)`;
+      requestAnimationFrame(() => card.classList.add('on'));
+    }
+
+    function hide() {
+      card.classList.remove('on');
+      card.hidden = true;
+    }
+
+    root.querySelectorAll<SVGAElement>('.station').forEach((st) => {
+      if (canHover) {
+        st.addEventListener('mouseenter', () => show(st));
+        st.addEventListener('mouseleave', hide);
+      }
+      st.addEventListener('focus', () => show(st));
+      st.addEventListener('blur', hide);
+    });
+  });
+</script>
+
+<style>
+  .frame {
+    position: relative;
+    border-radius: calc(var(--radius) + 10px);
+    background-color: #fcfcfb;
+    background-image: radial-gradient(circle at 1px 1px, #dedbd4 1px, transparent 1.2px);
+    background-size: 22px 22px;
+    border: 1px solid var(--rule);
+    padding: clamp(0.5rem, 2.5vw, 2rem);
+    overflow: hidden;
+  }
+
+  .map {
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .map.tall {
+    display: none;
+    max-width: 26rem;
+    margin-inline: auto;
+  }
+
+  @media (max-width: 47.99rem) {
+    .map.wide {
+      display: none;
+    }
+
+    .map.tall {
+      display: block;
+    }
+  }
+
+  .line {
+    fill: none;
+    stroke-width: 13;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: opacity 220ms var(--ease);
+  }
+
+  .tall .line {
+    stroke-width: 10;
+  }
+
+  .line.extension {
+    stroke-dasharray: 2 20;
+    stroke-width: 9;
+  }
+
+  .tall .line.extension {
+    stroke-dasharray: 1 15;
+    stroke-width: 7;
+  }
+
+  .station {
+    cursor: pointer;
+    outline: none;
+    transition: opacity 220ms var(--ease);
+  }
+
+  /* Until the intro has set its starting state, keep the map from flashing in. */
+  :global(html.motion) .map:not(:global(.ready)) .lines,
+  :global(html.motion) .map:not(:global(.ready)) .stations {
+    opacity: 0;
+  }
+
+  .stations :global(.halo) {
+    fill: none;
+    stroke-width: 2;
+    pointer-events: none;
+  }
+
+  .hit {
+    fill: transparent;
+  }
+
+  .ring {
+    fill: none;
+    stroke: var(--blue);
+    stroke-width: 2.5;
+    opacity: 0;
+  }
+
+  .station:focus-visible .ring {
+    opacity: 1;
+  }
+
+  .dot {
+    fill: #fff;
+    stroke-width: 4.5;
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 180ms var(--ease);
+  }
+
+  .interchange .dot {
+    stroke: var(--ink);
+    stroke-width: 4.5;
+  }
+
+  .future .dot {
+    stroke: var(--ink-3);
+    stroke-dasharray: 3 3;
+    stroke-width: 3;
+  }
+
+  .station:hover .dot,
+  .station:focus-visible .dot {
+    transform: scale(1.25);
+  }
+
+  .name {
+    font-family: var(--sans);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    fill: var(--ink);
+    paint-order: stroke;
+    stroke: #fcfcfb;
+    stroke-width: 5px;
+    stroke-linejoin: round;
+  }
+
+  .future .name {
+    fill: var(--ink-3);
+    font-weight: 500;
+  }
+
+  .station:hover .name {
+    fill: var(--blue);
+  }
+
+  /* Line focus */
+  .map[data-focus='systems'] .line:not([data-line='systems']),
+  .map[data-focus='ai'] .line:not([data-line='ai']),
+  .map[data-focus='research'] .line:not([data-line='research']),
+  .map[data-focus='product'] .line:not([data-line='product']) {
+    opacity: 0.12;
+  }
+
+  .map[data-focus='systems'] .station:not([data-lines~='systems']),
+  .map[data-focus='ai'] .station:not([data-lines~='ai']),
+  .map[data-focus='research'] .station:not([data-lines~='research']),
+  .map[data-focus='product'] .station:not([data-lines~='product']) {
+    opacity: 0.25;
+  }
+
+  /* Hover card */
+  .card {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    width: min(19rem, 70vw);
+    padding: var(--s4);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-top: 4px solid var(--line, var(--ink));
+    border-radius: 12px;
+    box-shadow: 0 2px 4px rgb(14 14 16 / 0.05), 0 18px 40px rgb(14 14 16 / 0.14);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 160ms var(--ease);
+  }
+
+  .card:global(.on) {
+    opacity: 1;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+  }
+
+  .card-head .bullet[hidden] {
+    display: none;
+  }
+
+  .card-name {
+    font-weight: 640;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  .card-kind {
+    font-size: 0.82rem;
+    color: var(--ink-3);
+  }
+
+  .card-text {
+    margin-top: var(--s3);
+    font-size: 0.92rem;
+    line-height: 1.45;
+  }
+
+  .card-metric {
+    margin-top: var(--s3);
+    padding-top: var(--s3);
+    border-top: 1px solid var(--rule);
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+  }
+
+  .card-metric[hidden] {
+    display: none;
+  }
+
+  .card-metric span {
+    font-size: 1.4rem;
+    font-weight: 680;
+    letter-spacing: -0.03em;
+    color: var(--line, var(--ink));
+  }
+
+  .card-metric small {
+    font-size: 0.78rem;
+    line-height: 1.3;
+    color: var(--ink-2);
+  }
+
+  .card-cta {
+    margin-top: var(--s3);
+    font-size: 0.82rem;
+    font-weight: 560;
+    color: var(--ink-2);
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s2);
+    margin-top: var(--s4);
+  }
+
+  .legend button {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.5rem 0.9rem 0.5rem 0.7rem;
+    font: 520 0.88rem/1 var(--sans);
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: border-color 140ms var(--ease), background-color 140ms var(--ease);
+  }
+
+  .legend button:hover {
+    border-color: var(--line);
+  }
+
+  .legend button[aria-pressed='true'] {
+    border-color: var(--line);
+    background: color-mix(in srgb, var(--line) 10%, white);
+  }
+
+  .legend i {
+    width: 1.4rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: var(--line);
+  }
+
+  .hint {
+    margin-left: auto;
+    color: var(--ink-3);
+  }
+
+  @media (hover: none) {
+    .hint {
+      display: none;
+    }
+  }
+</style>

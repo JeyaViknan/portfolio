@@ -1,0 +1,741 @@
+---
+import Base from '../layouts/Base.astro';
+import Figure from '../components/Figure.astro';
+import TechChip from '../components/TechChip.astro';
+import Flood from '../components/figures/Flood.astro';
+import Transfers from '../components/figures/Transfers.astro';
+import Race from '../components/figures/Race.astro';
+import Codes from '../components/figures/Codes.astro';
+import Shortlist from '../components/figures/Shortlist.astro';
+import Access from '../components/figures/Access.astro';
+import Loop from '../components/figures/Loop.astro';
+import Residual from '../components/figures/Residual.astro';
+import Sessions from '../components/figures/Sessions.astro';
+import { claims, profile, grades } from '../data/content';
+import { lines, stations, work } from '../data/network';
+import { brands, ui } from '../lib/icons';
+import { inline, plain } from '../lib/format';
+
+export function getStaticPaths() {
+  return claims.map((c, i) => ({ params: { slug: c.slug }, props: { i } }));
+}
+
+const { i } = Astro.props;
+const c = claims[i];
+const meta = work[c.slug];
+const line = lines[meta.line];
+const station = stations.find((s) => s.id === c.slug)!;
+const otherLines = station.lines.filter((l) => l !== meta.line).map((l) => lines[l]);
+const stops = line.stops.map((id) => stations.find((s) => s.id === id)!);
+if (line.id === 'product') stops.push(stations.find((s) => s.id === 'next')!);
+const prev = claims[i - 1];
+const next = claims[i + 1];
+const lineOf = (slug: string) => lines[work[slug].line];
+
+const figures = { flood: Flood, transfers: Transfers, race: Race, codes: Codes, shortlist: Shortlist, access: Access, loop: Loop, residual: Residual, sessions: Sessions } as const;
+const Fig = figures[c.figure.id as keyof typeof figures];
+---
+<Base title={`${c.heldBy}: ${c.statement.replace(/\.$/, '')} · ${profile.name}`} description={plain(c.lede)} accent={line.color}>
+  <div class="case" style={`--line: ${line.color}; --tint: ${line.tint}`}>
+    <div class="wrap case-top">
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="/#work"><span class="icon" set:html={ui.arrowLeft} /> All work</a>
+        <span class="crumb-line"><i></i>{line.name} line</span>
+      </nav>
+
+      <ol class="routebar" aria-label={`Stops on the ${line.name} line`}>
+        {stops.map((s) => (
+          <li class:list={{ here: s.id === c.slug, future: s.future, interchange: s.lines.length > 1 }}>
+            <a href={s.href} aria-current={s.id === c.slug ? 'page' : undefined}>
+              <span class="rb-dot" aria-hidden="true"></span>
+              <span class="rb-name">{s.name}</span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </div>
+
+    <header class="wrap case-head">
+      <div class="title-row">
+        <span class="bullet big" data-line={meta.line}>{c.n}</span>
+        <div>
+          <p class="label">
+            {line.name} line{otherLines.length > 0 && <> · change here for {otherLines.map((l) => l.name).join(', ')}</>}
+          </p>
+          <h1>{c.heldBy}</h1>
+          <p class="kind">{c.kind}</p>
+        </div>
+      </div>
+
+      <p class="promise" style={`view-transition-name: claim-${c.slug}`}>{c.statement}</p>
+
+      <div class="head-grid">
+        <p class="lede" set:html={inline(c.lede)} />
+        <dl class="facts">
+          <div>
+            <dt class="label">Status</dt>
+            <dd><span class={`status ${c.grade}`}>{grades[c.grade].short}</span> {c.gradeNote}</dd>
+          </div>
+          {c.role && (
+            <div>
+              <dt class="label">Role</dt>
+              <dd>{c.role}</dd>
+            </div>
+          )}
+          <div>
+            <dt class="label">Built with</dt>
+            <dd class="chips">{meta.tech.map((t) => <TechChip id={t} />)}</dd>
+          </div>
+          {c.links.length > 0 && (
+            <div>
+              <dt class="label">Code</dt>
+              <dd>
+                {c.links.map((l) => (
+                  <a class="btn" href={l.href} rel="noopener">
+                    <svg class="gh" viewBox="0 0 24 24" aria-hidden="true"><path d={brands.github.path} fill="currentColor" /></svg>
+                    {l.label} <span class="icon" set:html={ui.arrowUpRight} />
+                  </a>
+                ))}
+              </dd>
+            </div>
+          )}
+        </dl>
+      </div>
+
+      <dl class="metric-band">
+        {meta.metrics.map((m) => (
+          <div>
+            <dt>{m.label}</dt>
+            <dd data-count>{m.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </header>
+
+    <div class="wrap">
+      <Figure title={c.figure.title} caption={c.figure.caption} interactive={c.figure.interactive}>
+        <Fig />
+      </Figure>
+
+      {meta.image && (
+        <figure class="shot" data-reveal>
+          <img src={meta.image.src} alt={meta.image.alt} width={meta.image.width} height={meta.image.height} loading="lazy" decoding="async" />
+          <figcaption>{meta.image.caption}</figcaption>
+        </figure>
+      )}
+
+      <div class="case-body">
+        <section aria-labelledby="s-problem" data-reveal>
+          <h2 id="s-problem">Why it’s hard</h2>
+          <div class="prose">{c.problem.map((p) => <p set:html={inline(p)} />)}</div>
+        </section>
+
+        <section aria-labelledby="s-how" data-reveal>
+          <h2 id="s-how">How it holds</h2>
+          <div class="prose">{c.how.map((p) => <p set:html={inline(p)} />)}</div>
+        </section>
+
+        {c.decisions && (
+          <section aria-labelledby="s-decisions" data-reveal>
+            <h2 id="s-decisions">Decisions</h2>
+            <ol class="decisions">
+              {c.decisions.map((d, k) => (
+                <li>
+                  <span class="d-n mono">{String(k + 1).padStart(2, '0')}</span>
+                  <div>
+                    <p class="d-choice" set:html={inline(d.choice)} />
+                    <p class="d-why" set:html={inline(d.why)} />
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+
+        <section aria-labelledby="s-evidence" data-reveal>
+          <h2 id="s-evidence">Evidence</h2>
+          <div>
+            <table class="results">
+              <caption class="visually-hidden">Measured results for {c.heldBy}</caption>
+              <tbody>
+                {c.results.map((r) => (
+                  <tr>
+                    <th scope="row" set:html={inline(r.label)} />
+                    <td set:html={inline(r.value)} />
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {c.resultsNote && <p class="results-note" set:html={inline(c.resultsNote)} />}
+          </div>
+        </section>
+
+        <section class="limits" aria-labelledby="s-limits" data-reveal>
+          <h2 id="s-limits">Where it stops holding</h2>
+          <ul>{c.limits.map((l) => <li set:html={inline(l)} />)}</ul>
+        </section>
+      </div>
+
+      <nav class="pager" aria-label="More work">
+        {prev ? (
+          <a class="pager-link" href={`/${prev.slug}/`} data-key="ArrowLeft" style={`--line: ${lineOf(prev.slug).color}`}>
+            <span class="label"><span class="icon" set:html={ui.arrowLeft} /> Previous</span>
+            <span class="pager-title"><span class="bullet" data-line={work[prev.slug].line}>{prev.n}</span>{prev.heldBy}</span>
+            <span class="pager-promise">{prev.statement}</span>
+          </a>
+        ) : <span />}
+        {next ? (
+          <a class="pager-link next" href={`/${next.slug}/`} data-key="ArrowRight" style={`--line: ${lineOf(next.slug).color}`}>
+            <span class="label">Next <span class="icon" set:html={ui.arrowRight} /></span>
+            <span class="pager-title"><span class="bullet" data-line={work[next.slug].line}>{next.n}</span>{next.heldBy}</span>
+            <span class="pager-promise">{next.statement}</span>
+          </a>
+        ) : (
+          <a class="pager-link next" href="/#contact" style="--line: var(--amber)">
+            <span class="label">End of the line <span class="icon" set:html={ui.arrowRight} /></span>
+            <span class="pager-title">Next stop: your team</span>
+            <span class="pager-promise">Get in touch.</span>
+          </a>
+        )}
+      </nav>
+    </div>
+  </div>
+</Base>
+
+<script>
+  document.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.closest('input, textarea, select, [contenteditable]') || t.isContentEditable)) return;
+    const link = document.querySelector<HTMLAnchorElement>(`[data-key="${e.key}"]`);
+    if (link) {
+      e.preventDefault();
+      link.click();
+    }
+  });
+</script>
+
+<style>
+  .case-top {
+    padding-top: var(--s5);
+  }
+
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s3);
+    font-size: 0.9rem;
+  }
+
+  .crumbs a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--ink-2);
+    text-decoration: none;
+  }
+
+  .crumbs a:hover {
+    color: var(--ink);
+  }
+
+  .crumb-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--ink-2);
+  }
+
+  .crumb-line i {
+    width: 1.4rem;
+    height: 0.45rem;
+    border-radius: 999px;
+    background: var(--line);
+  }
+
+  /* Route bar */
+  .routebar {
+    display: flex;
+    margin-top: var(--s6);
+    padding-bottom: var(--s2);
+  }
+
+  .routebar li {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .routebar li::before {
+    content: '';
+    position: absolute;
+    top: 0.6rem;
+    left: -1px;
+    right: -1px;
+    height: 8px;
+    margin-top: -4px;
+    background: var(--line);
+  }
+
+  .routebar li:first-child::before {
+    left: 50%;
+  }
+
+  .routebar li:last-child::before {
+    right: 50%;
+  }
+
+  .routebar li.future::before {
+    background: repeating-linear-gradient(90deg, var(--line) 0 4px, transparent 4px 14px);
+  }
+
+  .routebar a {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: var(--s2);
+    padding-inline: 0.25rem;
+    text-align: center;
+    text-decoration: none;
+    color: var(--ink-3);
+    font-size: 0.82rem;
+    line-height: 1.25;
+  }
+
+  .rb-dot {
+    width: 1.2rem;
+    height: 1.2rem;
+    border-radius: 50%;
+    background: #fff;
+    border: 3.5px solid var(--line);
+    transition: transform 160ms var(--ease);
+  }
+
+  .interchange .rb-dot {
+    border-color: var(--ink);
+  }
+
+  .future .rb-dot {
+    border-style: dashed;
+    border-color: var(--ink-3);
+    border-width: 2px;
+  }
+
+  .routebar a:hover {
+    color: var(--ink);
+  }
+
+  .routebar a:hover .rb-dot {
+    transform: scale(1.2);
+  }
+
+  .here a {
+    color: var(--ink);
+    font-weight: 640;
+  }
+
+  .here .rb-dot {
+    width: 1.6rem;
+    height: 1.6rem;
+    margin-block: -0.2rem;
+    background: var(--line);
+    border: 5px solid #fff;
+    box-shadow: 0 0 0 3px var(--line);
+  }
+
+  .rb-name {
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 34rem) {
+    .rb-name {
+      font-size: 0.72rem;
+    }
+  }
+
+  /* Head */
+  .case-head {
+    padding-top: var(--s8);
+  }
+
+  .title-row {
+    display: flex;
+    align-items: center;
+    gap: clamp(0.9rem, 2.5vw, 1.6rem);
+  }
+
+  .bullet.big {
+    font-size: clamp(1.3rem, 1rem + 1.4vw, 2rem);
+  }
+
+  .case-head h1 {
+    margin-top: var(--s2);
+    font-size: var(--t-h1);
+    letter-spacing: -0.05em;
+    line-height: 0.95;
+  }
+
+  .kind {
+    margin-top: var(--s2);
+    font-size: 1.05rem;
+    color: var(--ink-3);
+  }
+
+  .promise {
+    margin-top: var(--s7);
+    max-width: 22ch;
+    font-size: var(--t-h2);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.08;
+    text-wrap: balance;
+  }
+
+  .promise::before {
+    content: '';
+    display: block;
+    width: 3rem;
+    height: 6px;
+    margin-bottom: var(--s5);
+    border-radius: 3px;
+    background: var(--line);
+  }
+
+  .head-grid {
+    display: grid;
+    gap: var(--s6) var(--s8);
+    margin-top: var(--s7);
+  }
+
+  @media (min-width: 60rem) {
+    .head-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+  }
+
+  .lede {
+    font-size: var(--t-lead);
+    line-height: 1.55;
+    color: var(--ink-2);
+    text-wrap: pretty;
+  }
+
+  .facts {
+    display: grid;
+    align-content: start;
+  }
+
+  .facts div {
+    display: grid;
+    grid-template-columns: 6.5rem minmax(0, 1fr);
+    gap: var(--s3);
+    align-items: baseline;
+    padding-block: var(--s3);
+    border-top: 1px solid var(--rule);
+    font-size: var(--t-small);
+    color: var(--ink-2);
+  }
+
+  .facts div:last-child {
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .facts dd {
+    margin: 0;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .status {
+    display: inline-block;
+    margin-right: 0.35rem;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background: var(--paper-2);
+    color: var(--ink);
+  }
+
+  .status.use {
+    background: var(--green-tint);
+    color: #006b47;
+  }
+
+  .status.measured {
+    background: var(--blue-tint);
+    color: #1747ae;
+  }
+
+  .status.modelled {
+    background: var(--amber-tint);
+    color: #8a5300;
+  }
+
+  .gh {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .metric-band {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: var(--s5);
+    margin-top: var(--s7);
+    padding: clamp(1.25rem, 3vw, 2rem);
+    border-radius: calc(var(--radius) + 6px);
+    background: var(--tint);
+  }
+
+  .metric-band div {
+    display: flex;
+    flex-direction: column-reverse;
+    justify-content: flex-end;
+    gap: 0.35rem;
+  }
+
+  .metric-band dd {
+    font-size: clamp(2rem, 1.4rem + 2vw, 3.2rem);
+    font-weight: 680;
+    letter-spacing: -0.045em;
+    line-height: 1;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .metric-band dt {
+    font-size: 0.88rem;
+    line-height: 1.4;
+    color: var(--ink-2);
+  }
+
+  /* Screenshot */
+  .shot {
+    margin-block: var(--s7);
+  }
+
+  .shot img {
+    width: 100%;
+    border-radius: calc(var(--radius) + 6px);
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+  }
+
+  .shot figcaption {
+    margin-top: var(--s3);
+    font-size: var(--t-small);
+    color: var(--ink-3);
+  }
+
+  /* Body */
+  .case-body > section {
+    display: grid;
+    gap: var(--s3) var(--s7);
+    padding-block: var(--s7);
+    border-top: 1px solid var(--rule);
+  }
+
+  @media (min-width: 56rem) {
+    .case-body > section {
+      grid-template-columns: 15rem minmax(0, 1fr);
+    }
+  }
+
+  .case-body h2 {
+    font-size: 1.25rem;
+    letter-spacing: -0.02em;
+    line-height: 1.3;
+  }
+
+  .prose {
+    max-width: var(--measure);
+    display: grid;
+    gap: var(--s4);
+    font-size: 1.06rem;
+    color: var(--ink-2);
+    text-wrap: pretty;
+  }
+
+  .decisions {
+    display: grid;
+    gap: var(--s5);
+    max-width: 44rem;
+  }
+
+  .decisions li {
+    display: grid;
+    grid-template-columns: 2.25rem minmax(0, 1fr);
+    gap: var(--s3);
+  }
+
+  .d-n {
+    padding-top: 0.2rem;
+    color: var(--line);
+    font-weight: 600;
+  }
+
+  .d-choice {
+    font-weight: 620;
+    line-height: 1.4;
+  }
+
+  .d-why {
+    margin-top: var(--s1);
+    color: var(--ink-2);
+    text-wrap: pretty;
+  }
+
+  .results {
+    width: 100%;
+    max-width: 48rem;
+    border-collapse: collapse;
+    font-size: var(--t-small);
+  }
+
+  .results th,
+  .results td {
+    text-align: left;
+    vertical-align: baseline;
+    padding: var(--s3) 0;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .results th {
+    width: 46%;
+    padding-right: var(--s5);
+    font-weight: 400;
+    color: var(--ink-2);
+  }
+
+  .results td {
+    font-weight: 560;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .results tr:first-child th,
+  .results tr:first-child td {
+    border-top: 1px solid var(--rule);
+  }
+
+  @media (max-width: 34rem) {
+    .results tr {
+      display: grid;
+      gap: var(--s1);
+      padding-block: var(--s3);
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .results th,
+    .results td,
+    .results tr:first-child th,
+    .results tr:first-child td {
+      width: auto;
+      border: 0;
+      padding: 0;
+    }
+  }
+
+  .results-note {
+    margin-top: var(--s3);
+    font-size: var(--t-small);
+    color: var(--ink-3);
+  }
+
+  .limits ul {
+    display: grid;
+    gap: var(--s3);
+    max-width: var(--measure);
+  }
+
+  .limits li {
+    position: relative;
+    padding: var(--s3) var(--s4) var(--s3) 2.75rem;
+    border-radius: 12px;
+    background: var(--paper-2);
+    color: var(--ink-2);
+    text-wrap: pretty;
+  }
+
+  .limits li::before {
+    content: '';
+    position: absolute;
+    left: 1rem;
+    top: 1.15rem;
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
+    border: 2.5px solid var(--signal);
+  }
+
+  /* Pager */
+  .pager {
+    display: grid;
+    gap: var(--s4);
+    margin-top: var(--s5);
+    padding-top: var(--s6);
+    border-top: 1px solid var(--rule);
+  }
+
+  @media (min-width: 48rem) {
+    .pager {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .pager-link {
+    display: grid;
+    gap: var(--s3);
+    padding: var(--s5);
+    border: 1px solid var(--rule);
+    border-radius: calc(var(--radius) + 4px);
+    text-decoration: none;
+    transition: border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+  }
+
+  .pager-link:hover {
+    border-color: var(--line);
+    box-shadow: var(--shadow);
+  }
+
+  .pager-link .label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .pager-link.next {
+    text-align: right;
+    justify-items: end;
+  }
+
+  .pager-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s3);
+    font-size: 1.35rem;
+    font-weight: 640;
+    letter-spacing: -0.02em;
+  }
+
+  .pager-title .bullet {
+    font-size: 0.72rem;
+  }
+
+  .pager-promise {
+    color: var(--ink-2);
+    font-size: 0.95rem;
+  }
+
+  @media (max-width: 47.99rem) {
+    .pager-link.next {
+      text-align: left;
+      justify-items: start;
+    }
+  }
+</style>

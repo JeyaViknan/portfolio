@@ -1,0 +1,104 @@
+---
+import './Flow.css';
+
+// Illustrative traces: a seeded generator, so the figure is the same on every build.
+function rng(seed: number) {
+  return () => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+}
+
+const CELLS = 150;
+const traces = [11, 29, 47, 83].map((seed, t) => {
+  const r = rng(seed);
+  const cells: number[] = [];
+  let inBurst = false;
+  for (let i = 0; i < CELLS; i++) {
+    if (r() < 0.12) inBurst = !inBurst;
+    const pIn = inBurst ? 0.92 : 0.45 + 0.1 * t;
+    cells.push(r() < pIn ? -1 : 1);
+  }
+  return cells;
+});
+const W = CELLS * 2.4;
+const gaps = ['0 s', '+6 s', '+11 s', '+19 s'];
+---
+<div class="sessions">
+  <div class="traces" aria-hidden="true">
+    <p class="label">One session · four page loads</p>
+    {traces.map((cells, t) => (
+      <div class="trace">
+        <span class="mono t-label">page {t + 1}<span>{gaps[t]}</span></span>
+        <svg viewBox={`0 -14 ${W} 28`} preserveAspectRatio="none">
+          <line x1="0" y1="0" x2={W} y2="0" class="mid" />
+          {cells.map((d, i) => (
+            <rect x={i * 2.4} width="1.4" y={d > 0 ? -9 : 0} height={d > 0 ? 9 : 13} class={d > 0 ? 'out' : 'in'} />
+          ))}
+        </svg>
+      </div>
+    ))}
+    <p class="mono legend">up: client to relay · down: relay to client · new session after a 30 s gap</p>
+  </div>
+
+  <ol class="flow">
+    <li><span class="step">Stage 1 · packet level</span><span class="detail">each trace alone → zⱼ</span></li>
+    <li class="key-step"><span class="step">Stage 2 · session level</span><span class="detail">attention QKᵀ/√d + Tᵢⱼ over z₁…z₄</span></li>
+    <li><span class="step">Two heads</span><span class="detail">which site · which kind of session</span></li>
+  </ol>
+</div>
+
+<style>
+  .sessions {
+    display: grid;
+    gap: var(--s6);
+  }
+
+  .traces .label {
+    margin-bottom: var(--s3);
+  }
+
+  .trace {
+    display: grid;
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--s3);
+    padding-block: 0.3rem;
+  }
+
+  .t-label {
+    display: grid;
+    color: var(--ink-2);
+    font-size: 0.7rem;
+  }
+
+  .t-label span {
+    color: var(--ink-3);
+  }
+
+  .trace svg {
+    width: 100%;
+    height: 2.4rem;
+    display: block;
+  }
+
+  .trace .mid {
+    stroke: var(--rule-strong);
+    stroke-width: 0.6;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .trace .out {
+    fill: var(--ink);
+  }
+
+  .trace .in {
+    fill: var(--ink-3);
+  }
+
+  .legend {
+    margin-top: var(--s3);
+    color: var(--ink-3);
+    font-size: 0.7rem;
+  }
+</style>

@@ -1,0 +1,166 @@
+---
+// Flat, geometric cover art for each project, drawn from what the project does.
+import { lines, work } from '../data/network';
+
+interface Props {
+  id: string;
+}
+const { id } = Astro.props;
+const line = lines[work[id]?.line ?? 'systems'];
+const C = line.color;
+const T = line.tint;
+const INK = '#0e0e10';
+const GREY = '#c8c5be';
+
+function rng(seed: number) {
+  return () => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+}
+
+// Switchyard: a yard ladder. Four tracks jammed with one tenant's cars, one track clear for the other.
+const tracks = [78, 120, 162, 204, 246];
+
+// Penny: debits mirrored by credits, row for row.
+const rows = [96, 148, 70, 182, 122, 60, 136];
+
+// Sorry No Proxy: a QR-like module grid.
+const qr = (() => {
+  const r = rng(7);
+  const n = 21;
+  const cells: [number, number, boolean][] = [];
+  const finder = (x: number, y: number) =>
+    (x < 7 && y < 7) || (x >= n - 7 && y < 7) || (x < 7 && y >= n - 7);
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) if (!finder(x, y) && r() < 0.48) cells.push([x, y, r() < 0.14]);
+  return { n, cells };
+})();
+
+// HC-WF: packet direction traces.
+const traces = [11, 29, 47, 83].map((seed, t) => {
+  const r = rng(seed);
+  let burst = false;
+  return Array.from({ length: 80 }, () => {
+    if (r() < 0.12) burst = !burst;
+    return r() < (burst ? 0.9 : 0.45 + 0.1 * t) ? -1 : 1;
+  });
+});
+
+// Meridian: routes converging on one agent.
+const routes = [
+  { d: 'M30 250 L120 250 L190 180 L200 170', c: C },
+  { d: 'M40 60 L110 60 L200 150', c: INK },
+  { d: 'M370 70 L300 70 L230 140 L215 155', c: GREY },
+  { d: 'M370 240 L280 240 L222 182', c: C },
+];
+---
+<svg class="cover" viewBox="0 0 400 300" role="img" aria-label={`Cover illustration for ${id}`} preserveAspectRatio="xMidYMid slice">
+  <rect width="400" height="300" fill={T} />
+
+  {id === 'switchyard' && (
+    <g>
+      <path d="M0 150 L70 150" stroke={INK} stroke-width="5" fill="none" stroke-linecap="round" />
+      {tracks.map((y) => (
+        <path d={`M70 150 L${70 + Math.abs(150 - y)} ${y} L400 ${y}`} stroke={INK} stroke-width="3" fill="none" stroke-linejoin="round" opacity="0.85" />
+      ))}
+      {tracks.slice(0, 4).map((y, i) => (
+        Array.from({ length: 7 - (i % 2) }, (_, k) => (
+          <rect x={150 + k * 34 + (i % 2) * 14} y={y - 9} width="28" height="18" rx="5" fill={GREY} />
+        ))
+      ))}
+      <rect x="252" y={tracks[4] - 11} width="62" height="22" rx="7" fill={C} />
+      <circle cx="70" cy="150" r="10" fill="#fff" stroke={INK} stroke-width="4" />
+    </g>
+  )}
+
+  {id === 'penny' && (
+    <g>
+      <line x1="200" y1="40" x2="200" y2="262" stroke={INK} stroke-width="2" />
+      {rows.map((w, i) => (
+        <g>
+          <rect x={196 - w} y={52 + i * 28} width={w} height="18" rx="4" fill={C} />
+          <rect x="204" y={52 + i * 28} width={w} height="18" rx="4" fill={INK} />
+        </g>
+      ))}
+    </g>
+  )}
+
+  {id === 'sorry-no-proxy' && (
+    <g transform="translate(110 40)">
+      <rect x="-14" y="-14" width="208" height="208" rx="14" fill="#fff" />
+      {[[0, 0], [14, 0], [0, 14]].map(([fx, fy]) => (
+        <g transform={`translate(${fx * 8.57} ${fy * 8.57})`}>
+          <rect width="60" height="60" rx="6" fill={INK} />
+          <rect x="8.5" y="8.5" width="43" height="43" rx="3" fill="#fff" />
+          <rect x="17" y="17" width="26" height="26" rx="2" fill={INK} />
+        </g>
+      ))}
+      {qr.cells.map(([x, y, hot]) => (
+        <rect x={x * 8.57} y={y * 8.57} width="7.6" height="7.6" rx="1.5" fill={hot ? C : INK} />
+      ))}
+      <rect x="0" y="198" width="180" height="6" rx="3" fill="#fff" opacity="0.7" />
+      <rect x="0" y="198" width="70" height="6" rx="3" fill={C} />
+    </g>
+  )}
+
+  {id === 'meridian' && (
+    <g>
+      {Array.from({ length: 9 }, (_, i) => Array.from({ length: 7 }, (_, j) => (
+        <circle cx={30 + i * 43} cy={30 + j * 40} r="1.6" fill={INK} opacity="0.25" />
+      )))}
+      {routes.map((r) => (
+        <path d={r.d} stroke={r.c} stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      ))}
+      <circle cx="208" cy="162" r="26" fill="#fff" stroke={INK} stroke-width="5" />
+      <circle cx="199" cy="162" r="5.5" fill={C} />
+      <circle cx="217" cy="162" r="5.5" fill={C} />
+    </g>
+  )}
+
+  {id === 'integra' && (
+    <g>
+      {[0, 1, 2].map((i) => (
+        <rect x={92 + i * 34} y={56 + i * 26} width="168" height="150" rx="12" fill={i === 2 ? '#fff' : C} opacity={i === 2 ? 1 : 0.25 + i * 0.3} stroke={i === 2 ? INK : 'none'} stroke-width="4" />
+      ))}
+      {[0, 1, 2].map((k) => (
+        <rect x="186" y={138 + k * 18} width={k === 2 ? 60 : 96} height="8" rx="4" fill={GREY} />
+      ))}
+      <rect x="282" y="188" width="56" height="46" rx="8" fill={INK} />
+      <path d="M292 188 v-12 a18 18 0 0 1 36 0 v12" fill="none" stroke={INK} stroke-width="7" />
+      <circle cx="310" cy="208" r="6" fill="#fff" />
+    </g>
+  )}
+
+  {id === 'autorag' && (
+    <g>
+      <circle cx="200" cy="150" r="92" fill="none" stroke={INK} stroke-width="5" />
+      <path d="M200 58 a92 92 0 0 1 86 60" fill="none" stroke={C} stroke-width="11" stroke-linecap="round" />
+      <path d="M279 106 l10 18 l-20 0 z" fill={C} />
+      {[0, 1, 2, 3, 4, 5].map((k) => {
+        const a = -Math.PI / 2 + (k * Math.PI) / 3;
+        return <circle cx={200 + 92 * Math.cos(a)} cy={150 + 92 * Math.sin(a)} r={k === 5 ? 13 : 9} fill={k === 5 ? '#00a06a' : '#fff'} stroke={INK} stroke-width="4" />;
+      })}
+      <text x="200" y="160" text-anchor="middle" font-family="var(--mono)" font-size="28" font-weight="500" fill={INK}>0.62</text>
+    </g>
+  )}
+
+  {id === 'hc-wf' && (
+    <g>
+      {traces.map((cells, t) => (
+        <g transform={`translate(28 ${62 + t * 58})`}>
+          {cells.map((d, i) => (
+            <rect x={i * 4.3} y={d > 0 ? -14 : 0} width="2.4" height={d > 0 ? 14 : 20} fill={d > 0 ? INK : C} />
+          ))}
+        </g>
+      ))}
+    </g>
+  )}
+</svg>
+
+<style>
+  .cover {
+    width: 100%;
+    height: 100%;
+  }
+</style>

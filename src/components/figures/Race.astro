@@ -1,0 +1,261 @@
+---
+const D = 6;
+---
+<div class="race" data-race>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="How capacity is claimed">
+      <button type="button" data-mode="naive" aria-pressed="true">Read, then write</button>
+      <button type="button" data-mode="guarded" aria-pressed="false">Guarded update</button>
+    </div>
+    <button type="button" class="btn primary" data-go>Dispatch all six</button>
+  </div>
+
+  <pre class="sql mono" data-sql aria-label="The query each dispatcher runs"></pre>
+
+  <div class="layout">
+    <ol class="dispatchers" data-list>
+      {Array.from({ length: D }, (_, i) => (
+        <li>
+          <span class="who mono">Dispatcher {i + 1}</span>
+          <span class="status mono" data-status>ready</span>
+        </li>
+      ))}
+    </ol>
+    <div class="agent">
+      <p class="label">Agent · capacity 2</p>
+      <div class="load" data-load aria-hidden="true"><i></i><i></i></div>
+      <p class="load-text mono" data-load-text>0 of 2 parcels</p>
+    </div>
+  </div>
+
+  <p class="verdict" data-verdict aria-live="polite">The agent has room for two parcels. Six dispatchers try at once.</p>
+</div>
+
+<script>
+  type Mode = 'naive' | 'guarded';
+  const D = 6;
+  const CAP = 2;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+
+  const SQL: Record<Mode, string> = {
+    naive: `SELECT activeOrderCount FROM agent_profiles WHERE id = $1;
+-- in the app: if count < 2 then
+UPDATE agent_profiles SET activeOrderCount = $count + 1 WHERE id = $1;`,
+    guarded: `UPDATE agent_profiles
+   SET activeOrderCount = activeOrderCount + 1
+ WHERE id = $1 AND activeOrderCount < maxConcurrentOrders;
+-- rowsAffected = 1 means you won`,
+  };
+
+  document.querySelectorAll<HTMLElement>('[data-race]').forEach((root) => {
+    const $ = <E extends Element>(s: string) => root.querySelector<E>(s)!;
+    const statuses = Array.from(root.querySelectorAll<HTMLElement>('[data-status]'));
+    const rows = Array.from(root.querySelectorAll<HTMLElement>('[data-list] li'));
+    const modeBtns = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-mode]'));
+    const go = $<HTMLButtonElement>('[data-go]');
+    const sql = $<HTMLElement>('[data-sql]');
+    const loadEl = $<HTMLElement>('[data-load]');
+    const loadText = $<HTMLElement>('[data-load-text]');
+    const verdict = $<HTMLElement>('[data-verdict]');
+
+    let mode: Mode = 'naive';
+    let count = 0;
+    let timer = 0;
+
+    function setLoad(n: number) {
+      while (loadEl.children.length < Math.max(CAP, n)) loadEl.appendChild(document.createElement('i'));
+      while (loadEl.children.length > Math.max(CAP, n)) loadEl.lastElementChild!.remove();
+      Array.from(loadEl.children).forEach((c, i) => (c.className = i < n ? (i < CAP ? 'on' : 'over') : ''));
+      loadText.textContent = `${n} of ${CAP} parcels`;
+      loadText.classList.toggle('bad', n > CAP);
+    }
+
+    function reset() {
+      clearTimeout(timer);
+      count = 0;
+      statuses.forEach((s) => (s.textContent = 'ready'));
+      rows.forEach((r) => (r.className = ''));
+      sql.textContent = SQL[mode];
+      setLoad(0);
+    }
+
+    function run() {
+      reset();
+      go.disabled = true;
+      modeBtns.forEach((b) => (b.disabled = true));
+      // Each dispatcher arrives at a random moment; a read-then-write also has a
+      // random gap between its read and its write. Events run in time order.
+      const events: { t: number; d: number }[] = [];
+      for (let d = 0; d < D; d++) {
+        const start = Math.random() * 1.6;
+        events.push({ t: start, d });
+        if (mode === 'naive') events.push({ t: start + 0.08 + Math.random() * 0.35, d });
+      }
+      events.sort((a, b) => a.t - b.t);
+      const order = events.map((e) => e.d);
+      const seen: number[] = Array(D).fill(0);
+      const pc = Array(D).fill(0);
+      let wins = 0;
+      let i = 0;
+
+      const tick = () => {
+        const d = order[i++];
+        const s = statuses[d];
+        if (mode === 'naive') {
+          if (pc[d] === 0) {
+            seen[d] = count;
+            s.textContent = `read ${count}`;
+            rows[d].className = 'active';
+          } else if (seen[d] < CAP) {
+            count = seen[d] + 1;
+            wins++;
+            s.textContent = `wrote ${seen[d] + 1}, claimed`;
+            rows[d].className = wins > CAP ? 'over' : 'won';
+          } else {
+            s.textContent = 'full, next agent';
+            rows[d].className = 'lost';
+          }
+        } else if (count < CAP) {
+          count++;
+          wins++;
+          s.textContent = 'rowsAffected 1, claimed';
+          rows[d].className = 'won';
+        } else {
+          s.textContent = 'rowsAffected 0, next agent';
+          rows[d].className = 'lost';
+        }
+        pc[d]++;
+        setLoad(mode === 'naive' ? wins : count);
+        if (i < order.length) timer = window.setTimeout(tick, reduce.matches ? 0 : 160);
+        else done(wins);
+      };
+      tick();
+    }
+
+    function done(wins: number) {
+      go.disabled = false;
+      go.textContent = 'Dispatch again';
+      modeBtns.forEach((b) => (b.disabled = false));
+      verdict.innerHTML =
+        wins > CAP
+          ? `<strong class="bad">${wins} dispatchers claimed the agent.</strong> Several read the load before anyone wrote it, so each saw room. The column now says ${count}, but ${wins} parcels are assigned.`
+          : wins === CAP && mode === 'naive'
+            ? `<strong>This interleaving happened to be safe.</strong> Run it again: nothing in the code prevents the next one from overbooking.`
+            : `<strong>Exactly ${wins} claimed the agent.</strong> Postgres serialises updates to the row, so the other ${D - wins} saw no row affected and moved to the next candidate.`;
+    }
+
+    go.addEventListener('click', run);
+    modeBtns.forEach((b) =>
+      b.addEventListener('click', () => {
+        mode = b.dataset.mode as Mode;
+        modeBtns.forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        go.textContent = 'Dispatch all six';
+        verdict.textContent = 'The agent has room for two parcels. Six dispatchers try at once.';
+        reset();
+      })
+    );
+    reset();
+  });
+</script>
+
+<style>
+  .race .controls {
+    margin-bottom: var(--s4);
+  }
+
+  .sql {
+    margin: 0 0 var(--s5);
+    padding: var(--s3) var(--s4);
+    background: var(--paper-2);
+    border-radius: 3px;
+    font-size: 0.74rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: var(--ink-2);
+  }
+
+  .layout {
+    display: grid;
+    gap: var(--s6);
+  }
+
+  @media (min-width: 48rem) {
+    .layout {
+      grid-template-columns: minmax(0, 1fr) 14rem;
+      align-items: start;
+    }
+  }
+
+  .dispatchers li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s3);
+    padding: 0.55rem var(--s3);
+    border-bottom: 1px solid var(--rule);
+    transition: background-color 120ms;
+  }
+
+  .dispatchers li:first-child {
+    border-top: 1px solid var(--rule);
+  }
+
+  .who {
+    color: var(--ink-2);
+  }
+
+  .status {
+    text-align: right;
+  }
+
+  .dispatchers li.active .status {
+    color: var(--ink);
+  }
+
+  .dispatchers li.won {
+    background: var(--accent-soft);
+  }
+
+  .dispatchers li.over {
+    background: var(--signal-soft);
+  }
+
+  .dispatchers li.over .status {
+    color: var(--signal);
+  }
+
+  .dispatchers li.lost .status {
+    color: var(--ink-3);
+  }
+
+  .agent .label {
+    margin-bottom: var(--s3);
+  }
+
+  .load {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .load :global(i) {
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 2px;
+  }
+
+  .load :global(i.on) {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .load :global(i.over) {
+    background: var(--signal);
+    border-color: var(--signal);
+  }
+
+  .load-text {
+    margin-top: var(--s3);
+  }
+</style>

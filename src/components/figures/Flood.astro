@@ -1,0 +1,457 @@
+---
+const SLOTS = 8;
+---
+<div class="flood" data-flood>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Scheduling policy">
+      <button type="button" data-policy="fifo" aria-pressed="false">FIFO</button>
+      <button type="button" data-policy="fair" aria-pressed="true">Token-fair</button>
+    </div>
+    <button type="button" class="btn primary" data-flood-btn aria-pressed="false">Start the flood</button>
+    <button type="button" class="btn" data-run-btn aria-pressed="false">Run</button>
+    <button type="button" class="btn" data-reset-btn>Reset</button>
+  </div>
+
+  <div class="stage" aria-hidden="true">
+    <div class="lane">
+      <span class="label">Slots</span>
+      <div class="cells slots" data-slots>
+        {Array.from({ length: SLOTS }, () => <i></i>)}
+      </div>
+    </div>
+    <div class="lane" data-lane-a>
+      <span class="label" data-lane-a-label>Quiet queue</span>
+      <div class="cells queue" data-queue-a></div>
+    </div>
+    <div class="lane" data-lane-b>
+      <span class="label">Noisy queue</span>
+      <div class="cells queue" data-queue-b></div>
+    </div>
+    <div class="lane chart-lane">
+      <span class="label">Quiet wait</span>
+      <svg class="chart" viewBox="0 0 300 60" preserveAspectRatio="none" data-chart>
+        <line x1="0" y1="59.5" x2="300" y2="59.5" class="axis" />
+        <polyline points="" data-line />
+      </svg>
+      <span class="chart-scale mono" data-scale>0–4 s · last 30 s</span>
+    </div>
+    <p class="key mono"><i class="q"></i> quiet tenant <i class="n"></i> noisy tenant <span data-clock>t = 0.0 s</span></p>
+  </div>
+
+  <dl class="readouts">
+    <div class="readout"><dt>Quiet · waiting now</dt><dd data-r-wait>0.0 s</dd></div>
+    <div class="readout"><dt>Quiet · worst, last 30 s</dt><dd data-r-worst>0.0 s</dd></div>
+    <div class="readout"><dt>Quiet · turned away</dt><dd data-r-qrej>0</dd></div>
+    <div class="readout"><dt>Noisy · turned away</dt><dd data-r-nrej>0</dd></div>
+  </dl>
+  <p class="verdict" data-verdict aria-live="polite">Press Run to start both tenants, then start the flood.</p>
+</div>
+
+<script>
+  type Tenant = 'q' | 'n';
+  interface Req { t: Tenant; arrived: number }
+
+  const SLOTS = 8;
+  const SERVICE = 2.4;           // seconds per request, both tenants
+  const QUIET_RATE = 1;          // requests per second
+  const FLOOD_RATE = 25;
+  const FLOOR = 3;               // reserved slots for the quiet tenant (token-fair)
+  const SHARED_BOUND = 40;       // FIFO: one shared queue
+  const TENANT_BOUND = 20;       // token-fair: per-tenant queues
+  const SPEED = 2;               // simulated seconds per real second
+  const DT = 0.02;
+  const WINDOW = 30;
+  const SHOW = 32;
+
+  document.querySelectorAll<HTMLElement>('[data-flood]').forEach((root) => {
+    const $ = <T extends Element>(s: string) => root.querySelector<T>(s)!;
+    const slotEls = Array.from(root.querySelectorAll<HTMLElement>('[data-slots] i'));
+    const queueA = $<HTMLElement>('[data-queue-a]');
+    const queueB = $<HTMLElement>('[data-queue-b]');
+    const laneB = $<HTMLElement>('[data-lane-b]');
+    const laneALabel = $<HTMLElement>('[data-lane-a-label]');
+    const line = $<SVGPolylineElement>('[data-line]');
+    const scaleEl = $<HTMLElement>('[data-scale]');
+    const clockEl = $<HTMLElement>('[data-clock]');
+    const floodBtn = $<HTMLButtonElement>('[data-flood-btn]');
+    const runBtn = $<HTMLButtonElement>('[data-run-btn]');
+    const resetBtn = $<HTMLButtonElement>('[data-reset-btn]');
+    const policyBtns = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-policy]'));
+    const r = {
+      wait: $<HTMLElement>('[data-r-wait]'),
+      worst: $<HTMLElement>('[data-r-worst]'),
+      qrej: $<HTMLElement>('[data-r-qrej]'),
+      nrej: $<HTMLElement>('[data-r-nrej]'),
+    };
+    const verdict = $<HTMLElement>('[data-verdict]');
+
+    // Fill the queue lanes with a fixed pool of cells.
+    for (const q of [queueA, queueB]) {
+      for (let i = 0; i < SHOW; i++) q.appendChild(document.createElement('i'));
+      const more = document.createElement('span');
+      more.className = 'more mono';
+      q.appendChild(more);
+    }
+
+    let policy: 'fifo' | 'fair' = 'fair';
+    let flooding = false;
+    let running = false;
+    let visible = true;
+    let now = 0;
+    let nextQuiet = 0;
+    let nextNoisy = 0;
+    let slots: ({ t: Tenant; ends: number } | null)[] = [];
+    let shared: Req[] = [];
+    let qq: Req[] = [];
+    let nq: Req[] = [];
+    let served = { q: 0, n: 0 };
+    let rejected = { q: 0, n: 0 };
+    let samples: { t: number; w: number }[] = [];
+    let lastQuietWait = 0;
+    let lastSample = -1;
+    let raf = 0;
+    let lastFrame = 0;
+    let lastVerdict = '';
+
+    function reset() {
+      now = 0;
+      nextQuiet = 0.3;
+      nextNoisy = 0.8;
+      slots = Array(SLOTS).fill(null);
+      shared = [];
+      qq = [];
+      nq = [];
+      served = { q: 0, n: 0 };
+      rejected = { q: 0, n: 0 };
+      samples = [];
+      lastQuietWait = 0;
+      lastSample = -1;
+      render();
+    }
+
+    function admit(req: Req) {
+      if (policy === 'fifo') {
+        if (shared.length >= SHARED_BOUND) rejected[req.t]++;
+        else shared.push(req);
+      } else {
+        const q = req.t === 'q' ? qq : nq;
+        if (q.length >= TENANT_BOUND) rejected[req.t]++;
+        else q.push(req);
+      }
+    }
+
+    function inflight(t: Tenant) {
+      return slots.filter((s) => s && s.t === t).length;
+    }
+
+    function pick(free: number): Req | undefined {
+      if (policy === 'fifo') return shared.shift();
+      // The quiet tenant's floor is reserved: the neighbour can't take those slots.
+      if (qq.length && inflight('q') < FLOOR) return qq.shift();
+      const reserved = Math.max(0, FLOOR - inflight('q'));
+      const noisyMay = nq.length > 0 && free > reserved;
+      // Above the floor, share by tokens used (equal weights here).
+      if (qq.length && noisyMay) return served.q <= served.n ? qq.shift() : nq.shift();
+      if (qq.length) return qq.shift();
+      if (noisyMay) return nq.shift();
+      return undefined;
+    }
+
+    function setPolicy(p: 'fifo' | 'fair') {
+      if (p === policy) return;
+      // Carry queued work across, in arrival order.
+      const all = policy === 'fifo' ? shared : [...qq, ...nq].sort((a, b) => a.arrived - b.arrived);
+      policy = p;
+      shared = [];
+      qq = [];
+      nq = [];
+      for (const req of all) admit(req);
+      policyBtns.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.policy === p)));
+      render();
+    }
+
+    function step() {
+      now += DT;
+      while (nextQuiet <= now) {
+        admit({ t: 'q', arrived: nextQuiet });
+        nextQuiet += 1 / QUIET_RATE;
+      }
+      const noisyRate = flooding ? FLOOD_RATE : QUIET_RATE;
+      while (nextNoisy <= now) {
+        admit({ t: 'n', arrived: nextNoisy });
+        nextNoisy += 1 / noisyRate;
+      }
+      for (let i = 0; i < SLOTS; i++) {
+        const s = slots[i];
+        if (s && s.ends <= now) slots[i] = null;
+      }
+      let free = slots.filter((s) => !s).length;
+      for (let i = 0; i < SLOTS && free > 0; i++) {
+        if (slots[i]) continue;
+        const req = pick(free);
+        if (!req) break;
+        slots[i] = { t: req.t, ends: now + SERVICE };
+        served[req.t]++;
+        free--;
+        if (req.t === 'q') lastQuietWait = now - req.arrived;
+      }
+      if (now - lastSample >= 0.25) {
+        lastSample = now;
+        samples.push({ t: now, w: quietWaitNow() });
+        while (samples.length && samples[0].t < now - WINDOW) samples.shift();
+      }
+    }
+
+    function quietWaitNow() {
+      const oldest = policy === 'fifo' ? shared.find((x) => x.t === 'q') : qq[0];
+      return oldest ? Math.max(now - oldest.arrived, 0) : lastQuietWait;
+    }
+
+    function drawQueue(el: HTMLElement, items: Req[]) {
+      const cells = el.querySelectorAll('i');
+      cells.forEach((c, i) => {
+        const it = items[i];
+        c.className = it ? it.t : '';
+      });
+      const more = el.querySelector('.more') as HTMLElement;
+      more.textContent = items.length > SHOW ? `+${items.length - SHOW}` : '';
+    }
+
+    function render() {
+      slotEls.forEach((el, i) => (el.className = slots[i]?.t ?? ''));
+      if (policy === 'fifo') {
+        laneALabel.textContent = 'Shared queue';
+        laneB.hidden = true;
+        drawQueue(queueA, shared);
+      } else {
+        laneALabel.textContent = 'Quiet queue';
+        laneB.hidden = false;
+        drawQueue(queueA, qq);
+        drawQueue(queueB, nq);
+      }
+      const worst = samples.reduce((m, s) => Math.max(m, s.w), quietWaitNow());
+      const top = Math.max(4, Math.ceil(worst / 4) * 4);
+      scaleEl.textContent = `0–${top} s · last ${WINDOW} s`;
+      line.setAttribute(
+        'points',
+        samples.map((s) => `${(300 * (s.t - (now - WINDOW))) / WINDOW},${59.5 - (58 * s.w) / top}`).join(' ')
+      );
+      const w = quietWaitNow();
+      r.wait.textContent = `${w.toFixed(1)} s`;
+      r.worst.textContent = `${worst.toFixed(1)} s`;
+      r.qrej.textContent = String(rejected.q);
+      r.nrej.textContent = String(rejected.n);
+      r.wait.classList.toggle('bad', w > 3);
+      r.worst.classList.toggle('bad', worst > 3);
+      r.qrej.classList.toggle('bad', rejected.q > 0);
+      clockEl.textContent = `t = ${now.toFixed(1)} s`;
+      updateVerdict(w);
+    }
+
+    function updateVerdict(w: number) {
+      let text: string;
+      if (!running && now === 0) text = 'Press Run to start both tenants, then start the flood.';
+      else if (!flooding) text = 'Both tenants send one request a second. Nobody waits.';
+      else if (policy === 'fifo')
+        text =
+          w > 3 || rejected.q > 0
+            ? `The quiet tenant is stuck behind the flood: ${w.toFixed(0)} s waiting, ${rejected.q} requests turned away by the shared queue.`
+            : 'The flood is filling the shared queue. Watch the quiet tenant’s wait.';
+      else
+        text =
+          'The flood fills only the noisy tenant’s own queue and is turned away there. The quiet tenant still starts within its reserved floor.';
+      if (text !== lastVerdict) {
+        verdict.textContent = text;
+        lastVerdict = text;
+      }
+    }
+
+    function frame(ts: number) {
+      if (!running || !visible || document.hidden) {
+        raf = 0;
+        return;
+      }
+      const elapsed = lastFrame ? Math.min((ts - lastFrame) / 1000, 0.1) : 0;
+      lastFrame = ts;
+      const steps = Math.round((elapsed * SPEED) / DT);
+      for (let i = 0; i < steps; i++) step();
+      render();
+      raf = requestAnimationFrame(frame);
+    }
+
+    function start() {
+      if (!raf && running && visible && !document.hidden) {
+        lastFrame = 0;
+        raf = requestAnimationFrame(frame);
+      }
+    }
+
+    function setRunning(on: boolean) {
+      running = on;
+      runBtn.textContent = on ? 'Pause' : 'Run';
+      runBtn.setAttribute('aria-pressed', String(on));
+      if (on) start();
+      render();
+    }
+
+    runBtn.addEventListener('click', () => setRunning(!running));
+    floodBtn.addEventListener('click', () => {
+      flooding = !flooding;
+      if (flooding) nextNoisy = now;
+      floodBtn.textContent = flooding ? 'Stop the flood' : 'Start the flood';
+      floodBtn.setAttribute('aria-pressed', String(flooding));
+      if (!running) setRunning(true);
+      else render();
+    });
+    resetBtn.addEventListener('click', () => {
+      flooding = false;
+      floodBtn.textContent = 'Start the flood';
+      floodBtn.setAttribute('aria-pressed', 'false');
+      setRunning(false);
+      reset();
+    });
+    policyBtns.forEach((b) => b.addEventListener('click', () => setPolicy(b.dataset.policy as 'fifo' | 'fair')));
+
+    new IntersectionObserver((entries) => {
+      visible = entries[0].isIntersecting;
+      if (visible) start();
+    }).observe(root);
+    document.addEventListener('visibilitychange', () => start());
+
+    reset();
+  });
+</script>
+
+<style>
+  .flood .controls {
+    margin-bottom: var(--s5);
+  }
+
+  .stage {
+    display: grid;
+    gap: var(--s3);
+  }
+
+  .lane {
+    display: grid;
+    grid-template-columns: 7.5rem minmax(0, 1fr);
+    align-items: center;
+    gap: var(--s3);
+    min-height: 1.6rem;
+  }
+
+  .lane[hidden] {
+    display: none;
+  }
+
+  .cells {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .cells :global(i) {
+    display: block;
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 1px;
+  }
+
+  .slots :global(i) {
+    width: 1.35rem;
+    height: 1.35rem;
+    border: 1px solid var(--rule-strong);
+  }
+
+  .queue :global(i:not(.q):not(.n)) {
+    display: none;
+  }
+
+  .cells :global(i.q),
+  .key i.q {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .cells :global(i.n),
+  .key i.n {
+    background: repeating-linear-gradient(135deg, var(--ink-3) 0 1.5px, transparent 1.5px 4px);
+    box-shadow: inset 0 0 0 1px var(--ink-3);
+    border-color: var(--ink-3);
+  }
+
+  .cells :global(.more) {
+    margin-left: var(--s2);
+    color: var(--ink-3);
+  }
+
+  .chart-lane {
+    grid-template-columns: 7.5rem minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  .chart {
+    width: 100%;
+    height: 3.5rem;
+    overflow: visible;
+  }
+
+  .chart .axis {
+    stroke: var(--rule-strong);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .chart polyline {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.75;
+    vector-effect: non-scaling-stroke;
+    stroke-linejoin: round;
+  }
+
+  .chart-scale {
+    color: var(--ink-3);
+    font-size: 0.7rem;
+  }
+
+  .key {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s2);
+    color: var(--ink-3);
+    margin-top: var(--s2);
+  }
+
+  .key i {
+    display: inline-block;
+    width: 0.7rem;
+    height: 0.7rem;
+  }
+
+  .key i.n {
+    margin-left: var(--s3);
+  }
+
+  .key span {
+    margin-left: auto;
+  }
+
+  @media (max-width: 34rem) {
+    .lane,
+    .chart-lane {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--s1);
+    }
+
+    .chart-lane {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .chart-lane .label {
+      grid-column: 1 / -1;
+    }
+  }
+</style>

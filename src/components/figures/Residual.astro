@@ -1,0 +1,408 @@
+---
+const communities = [
+  { id: 'L', name: 'Longbourn', people: ['Mr Bennet', 'Mrs Bennet', 'Jane', 'Elizabeth', 'Lydia'] },
+  { id: 'P', name: 'Pemberley', people: ['Darcy', 'Bingley', 'Caroline', 'Georgiana', 'Wickham'] },
+  { id: 'R', name: 'Rosings', people: ['Lady Catherine', 'Mr Collins', 'Charlotte', 'Anne', 'Fitzwilliam'] },
+];
+const edges: [string, string, string][] = [
+  ['Mr Bennet', 'Mrs Bennet', 'married to'],
+  ['Mr Bennet', 'Elizabeth', 'father of'],
+  ['Mrs Bennet', 'Jane', 'mother of'],
+  ['Mrs Bennet', 'Lydia', 'mother of'],
+  ['Jane', 'Elizabeth', 'sisters'],
+  ['Elizabeth', 'Lydia', 'sisters'],
+  ['Mrs Bennet', 'Elizabeth', 'mother of'],
+  ['Darcy', 'Bingley', 'friends'],
+  ['Darcy', 'Georgiana', 'brother of'],
+  ['Bingley', 'Caroline', 'brother of'],
+  ['Caroline', 'Darcy', 'pursues'],
+  ['Darcy', 'Wickham', 'rivals'],
+  ['Wickham', 'Georgiana', 'tried to elope with'],
+  ['Lady Catherine', 'Mr Collins', 'patron of'],
+  ['Mr Collins', 'Charlotte', 'married to'],
+  ['Lady Catherine', 'Anne', 'mother of'],
+  ['Lady Catherine', 'Fitzwilliam', 'aunt of'],
+  ['Fitzwilliam', 'Anne', 'cousins'],
+  ['Elizabeth', 'Darcy', 'marries'],
+  ['Jane', 'Bingley', 'marries'],
+  ['Lydia', 'Wickham', 'elopes with'],
+  ['Elizabeth', 'Wickham', 'is misled by'],
+  ['Elizabeth', 'Charlotte', 'friends'],
+  ['Mr Collins', 'Mr Bennet', 'heir to'],
+  ['Mr Collins', 'Elizabeth', 'proposes to'],
+  ['Darcy', 'Lady Catherine', 'nephew of'],
+  ['Darcy', 'Fitzwilliam', 'cousins'],
+  ['Elizabeth', 'Fitzwilliam', 'confides in'],
+];
+---
+<div class="residual" data-residual>
+  <div class="controls">
+    <label class="budget">
+      <span class="label">Summary budget</span>
+      <input type="range" min="1" max="7" value="3" step="1" data-budget aria-describedby="budget-help" />
+      <output class="mono" data-budget-out>3 per community</output>
+    </label>
+    <button type="button" class="btn primary" data-toggle aria-pressed="false">Add the residual</button>
+  </div>
+  <p id="budget-help" class="visually-hidden">How many of its own relationships each community summary can include, most connected first.</p>
+
+  <div class="canvas">
+    <svg data-svg role="img" aria-labelledby="graph-title">
+      <title id="graph-title">Characters of Pride and Prejudice in three communities, with relationships drawn as lines</title>
+      <g data-edges></g>
+      <g data-nodes></g>
+    </svg>
+  </div>
+
+  <p class="key mono" aria-hidden="true">
+    <span><i class="k kept"></i>in a summary</span>
+    <span><i class="k boundary"></i>crosses a community</span>
+    <span><i class="k budget"></i>over budget</span>
+    <span><i class="k recorded"></i>in the residual</span>
+  </p>
+
+  <dl class="readouts">
+    <div class="readout"><dt>In a summary</dt><dd data-r-kept></dd></div>
+    <div class="readout"><dt>Cross a community</dt><dd data-r-boundary></dd></div>
+    <div class="readout"><dt>Over budget</dt><dd data-r-budget></dd></div>
+    <div class="readout"><dt>Lost without a record</dt><dd data-r-lost></dd></div>
+  </dl>
+  <p class="verdict" data-verdict aria-live="polite"></p>
+
+  <details class="residual-list" data-list-wrap hidden>
+    <summary class="mono">The residual, <span data-list-count></span> relationships</summary>
+    <ol class="mono" data-list></ol>
+  </details>
+
+  <script type="application/json" data-graph set:html={JSON.stringify({ communities, edges })} />
+</div>
+
+<script>
+  interface Graph {
+    communities: { id: string; name: string; people: string[] }[];
+    edges: [string, string, string][];
+  }
+  type EdgeState = 'kept' | 'boundary' | 'budget';
+  const NS = 'http://www.w3.org/2000/svg';
+
+  document.querySelectorAll<HTMLElement>('[data-residual]').forEach((root) => {
+    const g = JSON.parse(root.querySelector('[data-graph]')!.textContent || '{}') as Graph;
+    const svg = root.querySelector<SVGSVGElement>('[data-svg]')!;
+    const edgeLayer = root.querySelector<SVGGElement>('[data-edges]')!;
+    const nodeLayer = root.querySelector<SVGGElement>('[data-nodes]')!;
+    const budget = root.querySelector<HTMLInputElement>('[data-budget]')!;
+    const budgetOut = root.querySelector<HTMLOutputElement>('[data-budget-out]')!;
+    const toggle = root.querySelector<HTMLButtonElement>('[data-toggle]')!;
+    const listWrap = root.querySelector<HTMLDetailsElement>('[data-list-wrap]')!;
+    const list = root.querySelector<HTMLOListElement>('[data-list]')!;
+    const listCount = root.querySelector<HTMLElement>('[data-list-count]')!;
+    const verdict = root.querySelector<HTMLElement>('[data-verdict]')!;
+    const r = {
+      kept: root.querySelector<HTMLElement>('[data-r-kept]')!,
+      boundary: root.querySelector<HTMLElement>('[data-r-boundary]')!,
+      budget: root.querySelector<HTMLElement>('[data-r-budget]')!,
+      lost: root.querySelector<HTMLElement>('[data-r-lost]')!,
+    };
+
+    const community = new Map<string, string>();
+    g.communities.forEach((c) => c.people.forEach((p) => community.set(p, c.id)));
+    const degree = new Map<string, number>();
+    g.edges.forEach(([a, b]) => {
+      degree.set(a, (degree.get(a) ?? 0) + 1);
+      degree.set(b, (degree.get(b) ?? 0) + 1);
+    });
+
+    let withResidual = false;
+    let narrow = false;
+    const pos = new Map<string, { x: number; y: number; ax: 'start' | 'end' | 'middle'; dy: number }>();
+    const lines: SVGLineElement[] = [];
+
+    function layout() {
+      narrow = root.clientWidth < 560;
+      const W = narrow ? 360 : 820;
+      const H = narrow ? 720 : 420;
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      const centers = narrow
+        ? [{ x: 180, y: 125 }, { x: 180, y: 360 }, { x: 180, y: 595 }]
+        : [{ x: 145, y: 225 }, { x: 410, y: 175 }, { x: 675, y: 240 }];
+      const rx = narrow ? 100 : 98;
+      const ry = narrow ? 74 : 92;
+      g.communities.forEach((c, ci) => {
+        const ctr = centers[ci];
+        c.people.forEach((p, i) => {
+          const a = -Math.PI / 2 + (i * 2 * Math.PI) / c.people.length;
+          const x = ctr.x + rx * Math.cos(a);
+          const y = ctr.y + ry * Math.sin(a);
+          // Labels sit above nodes in the top half of a community and below in the bottom half.
+          pos.set(p, { x, y, ax: 'middle', dy: Math.sin(a) < 0.2 ? -11 : 21 });
+        });
+      });
+      drawStatic(centers, ry);
+    }
+
+    function drawStatic(centers: { x: number; y: number }[], ry: number) {
+      edgeLayer.replaceChildren();
+      nodeLayer.replaceChildren();
+      lines.length = 0;
+      g.communities.forEach((c, ci) => {
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', String(centers[ci].x));
+        t.setAttribute('y', String(centers[ci].y - ry - 34));
+        t.setAttribute('class', 'cname');
+        t.setAttribute('text-anchor', 'middle');
+        t.textContent = c.name.toUpperCase();
+        nodeLayer.appendChild(t);
+      });
+      g.edges.forEach(([a, b]) => {
+        const pa = pos.get(a)!, pb = pos.get(b)!;
+        const l = document.createElementNS(NS, 'line');
+        l.setAttribute('x1', String(pa.x));
+        l.setAttribute('y1', String(pa.y));
+        l.setAttribute('x2', String(pb.x));
+        l.setAttribute('y2', String(pb.y));
+        edgeLayer.appendChild(l);
+        lines.push(l);
+      });
+      for (const [p, q] of pos) {
+        const dot = document.createElementNS(NS, 'circle');
+        dot.setAttribute('cx', String(q.x));
+        dot.setAttribute('cy', String(q.y));
+        dot.setAttribute('r', '4.5');
+        dot.setAttribute('class', 'node');
+        nodeLayer.appendChild(dot);
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('x', String(q.x));
+        t.setAttribute('y', String(q.y + q.dy));
+        t.setAttribute('text-anchor', q.ax);
+        t.setAttribute('class', 'nlabel');
+        t.textContent = p;
+        nodeLayer.appendChild(t);
+      }
+      update();
+    }
+
+    function classify(k: number): EdgeState[] {
+      const states: EdgeState[] = g.edges.map(([a, b]) => (community.get(a) === community.get(b) ? 'budget' : 'boundary'));
+      for (const c of g.communities) {
+        // Most connected first, the order GraphRAG admits elements into a summary.
+        const own = g.edges
+          .map((e, i) => ({ e, i, score: (degree.get(e[0]) ?? 0) + (degree.get(e[1]) ?? 0) }))
+          .filter(({ e }) => community.get(e[0]) === c.id && community.get(e[1]) === c.id)
+          .sort((x, y) => y.score - x.score || x.i - y.i);
+        own.slice(0, k).forEach(({ i }) => (states[i] = 'kept'));
+      }
+      return states;
+    }
+
+    function update() {
+      const k = Number(budget.value);
+      budgetOut.textContent = `${k} per community`;
+      const states = classify(k);
+      lines.forEach((l, i) => {
+        const s = states[i];
+        l.setAttribute('class', s === 'kept' ? 'kept' : withResidual ? `recorded ${s}` : s);
+        const [a, b] = g.edges[i];
+        l.classList.toggle('star', (a === 'Elizabeth' && b === 'Darcy'));
+      });
+      const kept = states.filter((s) => s === 'kept').length;
+      const boundary = states.filter((s) => s === 'boundary').length;
+      const over = states.filter((s) => s === 'budget').length;
+      const total = g.edges.length;
+      r.kept.textContent = `${kept} of ${total}`;
+      r.boundary.textContent = String(boundary);
+      r.budget.textContent = String(over);
+      r.lost.textContent = withResidual ? '0' : String(boundary + over);
+      r.lost.classList.toggle('bad', !withResidual);
+
+      verdict.innerHTML = withResidual
+        ? `<strong>Nothing is lost without a record.</strong> The residual holds the ${boundary + over} relationships the summaries couldn’t carry, Elizabeth and Darcy included. It was computed as a set difference over the index, with no model calls.`
+        : `<strong class="bad">Elizabeth and Darcy sit in different communities,</strong> so the relationship the whole novel turns on is in no summary. ${over ? `Another ${over} relationships didn’t fit the budget.` : ''}`;
+
+      list.replaceChildren(
+        ...g.edges
+          .map((e, i) => ({ e, s: states[i] }))
+          .filter(({ s }) => s !== 'kept')
+          .map(({ e, s }) => {
+            const li = document.createElement('li');
+            li.textContent = `${e[0]} ${e[2]} ${e[1]}`;
+            const tag = document.createElement('span');
+            tag.textContent = s === 'boundary' ? 'boundary' : 'budget';
+            li.appendChild(tag);
+            return li;
+          })
+      );
+      listCount.textContent = String(boundary + over);
+      listWrap.hidden = !withResidual;
+    }
+
+    budget.addEventListener('input', update);
+    toggle.addEventListener('click', () => {
+      withResidual = !withResidual;
+      toggle.setAttribute('aria-pressed', String(withResidual));
+      toggle.textContent = withResidual ? 'Remove the residual' : 'Add the residual';
+      update();
+    });
+
+    layout();
+    let lastNarrow = narrow;
+    new ResizeObserver(() => {
+      const n = root.clientWidth < 560;
+      if (n !== lastNarrow) {
+        lastNarrow = n;
+        layout();
+      }
+    }).observe(root);
+  });
+</script>
+
+<style>
+  .residual .controls {
+    gap: var(--s4) var(--s5);
+    margin-bottom: var(--s4);
+  }
+
+  .budget {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s3);
+  }
+
+  input[type='range'] {
+    width: 9rem;
+    accent-color: var(--ink);
+  }
+
+  .canvas {
+    max-width: 54rem;
+    margin-inline: auto;
+  }
+
+  .canvas svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  .canvas :global(line) {
+    stroke-width: 1.4;
+    transition: stroke 160ms, opacity 160ms;
+  }
+
+  .canvas :global(line.kept) {
+    stroke: var(--ink);
+    stroke-width: 1.8;
+  }
+
+  .canvas :global(line.boundary) {
+    stroke: var(--signal);
+    stroke-dasharray: 5 4;
+  }
+
+  .canvas :global(line.budget) {
+    stroke: var(--signal);
+    stroke-dasharray: 1.5 3.5;
+    stroke-linecap: round;
+  }
+
+  .canvas :global(line.recorded) {
+    stroke: var(--accent);
+    stroke-dasharray: none;
+    opacity: 0.85;
+  }
+
+  .canvas :global(line.star) {
+    stroke-width: 2.6;
+  }
+
+  .canvas :global(.node) {
+    fill: var(--paper);
+    stroke: var(--ink);
+    stroke-width: 1.5;
+  }
+
+  .canvas :global(.nlabel) {
+    font-family: var(--serif);
+    font-size: 13.5px;
+    fill: var(--ink);
+    paint-order: stroke;
+    stroke: var(--paper);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+
+  .canvas :global(.cname) {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
+    fill: var(--ink-3);
+    paint-order: stroke;
+    stroke: var(--paper);
+    stroke-width: 4px;
+  }
+
+  .key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2) var(--s5);
+    margin-top: var(--s4);
+    color: var(--ink-3);
+  }
+
+  .key span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .k {
+    display: inline-block;
+    width: 1.4rem;
+    height: 0;
+    border-top: 2px solid var(--ink);
+  }
+
+  .k.boundary {
+    border-top: 2px dashed var(--signal);
+  }
+
+  .k.budget {
+    border-top: 2px dotted var(--signal);
+  }
+
+  .k.recorded {
+    border-top-color: var(--accent);
+  }
+
+  .residual-list {
+    margin-top: var(--s4);
+  }
+
+  .residual-list summary {
+    cursor: pointer;
+    color: var(--accent);
+    padding-block: var(--s2);
+  }
+
+  .residual-list ol {
+    columns: 2 16rem;
+    column-gap: var(--s6);
+    margin-top: var(--s3);
+    font-size: 0.72rem;
+    color: var(--ink-2);
+  }
+
+  .residual-list :global(li) {
+    break-inside: avoid;
+    padding-block: 0.2rem;
+    border-bottom: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--s3);
+  }
+
+  .residual-list :global(li span) {
+    color: var(--ink-3);
+  }
+</style>

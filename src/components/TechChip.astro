@@ -1,0 +1,46 @@
+---
+import { tech } from '../lib/icons';
+interface Props { id: string; size?: 'sm' | 'md' }
+const { id, size = 'sm' } = Astro.props;
+const t = tech[id] ?? { label: id };
+---
+<span class:list={['chip', size]}>
+  {t.icon && (
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d={t.icon.path} fill={`#${t.icon.hex}`} /></svg>
+  )}
+  {t.label}
+</span>
+
+<style>
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.32rem 0.65rem 0.32rem 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--ink-2);
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  .chip svg {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
+  .chip.md {
+    gap: 0.55rem;
+    padding: 0.5rem 0.85rem 0.5rem 0.65rem;
+    font-size: 0.9rem;
+    color: var(--ink);
+  }
+
+  .chip.md svg {
+    width: 1.2rem;
+    height: 1.2rem;
+  }
+</style>

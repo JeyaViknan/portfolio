@@ -1,0 +1,16 @@
+---
+import { inline } from '../lib/format';
+interface Props { n?: number; title: string; caption: string; interactive: boolean }
+const { n = 1, title, caption, interactive } = Astro.props;
+---
+<figure class="figure" aria-labelledby={`fig-${n}-title`}>
+  <div class="figure-bar">
+    <p class="figure-title" id={`fig-${n}-title`}>Fig. {n} · {title}</p>
+    {interactive && <p class="figure-kind label">Runs in your browser</p>}
+  </div>
+  <slot />
+  {interactive && (
+    <noscript><p class="noscript-note">This model needs JavaScript. The measured results are under Evidence.</p></noscript>
+  )}
+  <figcaption><b>Fig. {n}</b><Fragment set:html={inline(caption)} /></figcaption>
+</figure>

@@ -1,0 +1,43 @@
+---
+import './Flow.css';
+---
+<div class="flows">
+  <ol class="flow">
+    <li><span class="step">Rewrite the question</span><span class="detail">query rewriter</span></li>
+    <li><span class="step">Retrieve two ways</span><span class="detail">FAISS 30 + BM25 30</span></li>
+    <li><span class="step">Rerank</span><span class="detail">cross-encoder, MiniLM</span></li>
+    <li><span class="step">Build context</span><span class="detail">top 8 · 2,500 tokens</span></li>
+    <li><span class="step">Generate</span><span class="detail">answer from context</span></li>
+    <li class="key-step"><span class="step">Check support</span><span class="detail">0.5 similarity + 0.5 NLI</span></li>
+  </ol>
+  <div class="branches">
+    <p><span class="label">Score ≥ 0.62</span> Return the answer with its confidence and source chunks.</p>
+    <p><span class="label">Score &lt; 0.62</span> Reformulate and run again, up to two retries, keeping the best attempt.</p>
+  </div>
+</div>
+
+<style>
+  .branches {
+    display: grid;
+    gap: var(--s3) var(--s6);
+    font-size: var(--t-small);
+    color: var(--ink-2);
+  }
+
+  @media (min-width: 52rem) {
+    .branches {
+      grid-template-columns: 1fr 1fr;
+    }
+  }
+
+  .branches p {
+    padding-top: var(--s3);
+    border-top: 1px solid var(--rule);
+  }
+
+  .branches .label {
+    display: block;
+    margin-bottom: var(--s1);
+    color: var(--ink);
+  }
+</style>
