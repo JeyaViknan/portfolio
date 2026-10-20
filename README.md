@@ -1,6 +1,6 @@
 # Portfolio
 
-A static site built with Astro, drawn as a transit-style network map of projects and roles. It uses GSAP and Lenis for motion (both off under reduced motion), Simple Icons for brand logos, Lucide for interface icons and Geist for type. Everything is bundled and self-hosted, so the site sets no cookies and makes no third-party requests.
+A static site built with Astro. The landing page is a split-flap departure board, followed by a transit-style network map of projects and roles. Motion uses the browser's own Web Animations API, wheel scrolling is smoothed with Lenis (both stop under reduced motion), brand logos come from Simple Icons, interface icons from Lucide, and type is Geist. Everything is bundled and self-hosted, so the site sets no cookies and makes no third-party requests, and it ships about 36 KB of JavaScript (13 KB compressed).
 
 ## Run it
 

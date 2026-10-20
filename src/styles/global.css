@@ -71,6 +71,12 @@ html {
   scroll-padding-top: 5rem;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 body {
   margin: 0;
   background: var(--paper);
@@ -427,13 +433,6 @@ strong {
 
 html.js .js-only {
   display: revert;
-}
-
-/* Reveal on scroll: only hidden once the motion script has taken over. */
-
-html.motion [data-reveal] {
-  opacity: 0;
-  transform: translateY(18px);
 }
 
 body:has(.contact) .site-footer {

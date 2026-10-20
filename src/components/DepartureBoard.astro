@@ -1,0 +1,490 @@
+---
+// The landing hero: a split-flap departure board. Every project is a departure,
+// its line is a coloured tile, and its status is its evidence grade in railway terms.
+import Flaps from './Flaps.astro';
+import { claims, profile, type Grade } from '../data/content';
+import { lines, work } from '../data/network';
+import { brands, ui } from '../lib/icons';
+
+const shortName: Record<string, string> = {
+  'residual-graph-indexing': 'Residual graph',
+  integra: 'Integra',
+};
+const status: Record<Grade, { text: string; words: string }> = {
+  use: { text: 'In service', words: 'in service with real users' },
+  measured: { text: 'Tested', words: 'tested and measured' },
+  modelled: { text: 'In trials', words: 'in trials, shown in simulation' },
+};
+const code = { systems: 'SYS', ai: 'AI', research: 'RES', product: 'PRD' } as const;
+
+const rows = [
+  ...claims.map((c) => {
+    const line = lines[work[c.slug].line];
+    return {
+      href: `/${c.slug}/`,
+      n: c.n,
+      dest: shortName[c.slug] ?? c.heldBy,
+      code: code[line.id],
+      tint: line.color,
+      ink: line.id === 'product' ? '#0e0e10' : '#ffffff',
+      lamp: line.color,
+      status: status[c.grade].text,
+      hover: 'Board now ›',
+      label: `${c.n}, ${c.heldBy}, ${line.name} line, ${status[c.grade].words}. Open the case study.`,
+    };
+  }),
+  {
+    href: '#contact',
+    n: '10',
+    dest: 'Your team',
+    code: '›››',
+    tint: lines.product.color,
+    ink: '#0e0e10',
+    lamp: lines.product.color,
+    status: 'May 2027',
+    hover: 'Say hello ›',
+    label: 'Your team, boarding from May 2027. Get in touch.',
+  },
+];
+---
+<section id="departures" class="wall" aria-labelledby="board-title">
+  <script is:inline>
+    // Hold the flaps blank until the board script takes over, unless motion is off.
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      document.documentElement.classList.add('board-pending');
+      setTimeout(function () { document.documentElement.classList.remove('board-pending'); }, 3000);
+    }
+  </script>
+
+  <div class="rig">
+    <span class="rod left" aria-hidden="true"></span>
+    <span class="rod right" aria-hidden="true"></span>
+
+    <div class="board" data-board>
+      <div class="strip">
+        <p class="print">Departures</p>
+        <p class="clock">
+          <span class="print">Chennai</span>
+          <Flaps text="" n={5} data-clock />
+        </p>
+      </div>
+
+      <h1 id="board-title" class="title">
+        <span class="visually-hidden">{profile.name}, software engineer</span>
+        <Flaps text={profile.name} data-intro />
+      </h1>
+      <p class="subtitle">
+        <Flaps text="Software engineer" data-intro />
+      </p>
+
+      <div class="table">
+        <p class="head" aria-hidden="true">
+          <span></span>
+          <span class="print">No.</span>
+          <span class="print">Destination</span>
+          <span class="print">Line</span>
+          <span class="print st">Status</span>
+        </p>
+        <ol class="rows" aria-label="Projects">
+          {rows.map((r) => (
+            <li>
+              <a class="row" href={r.href} aria-label={r.label} style={`--lamp: ${r.lamp}`} data-row>
+                <span class="lamp" aria-hidden="true"></span>
+                <Flaps text={r.n} n={2} data-intro />
+                <Flaps text={r.dest} n={14} data-intro />
+                <Flaps text={r.code} n={3} tint={r.tint} ink={r.ink} data-intro />
+                <Flaps class="st" text={r.status} n={11} data-intro data-status={r.status.toUpperCase().padEnd(11, ' ')} data-hover={r.hover.toUpperCase().padEnd(11, ' ')} />
+              </a>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+
+    <div class="intro">
+      <p>
+        <strong>I build software that keeps its promises.</strong> Backend systems, AI tooling and research. Final-year computer science at VIT Chennai, data science at IIT Madras, co-founder of HUDO.
+      </p>
+      <div class="actions">
+        <a class="btn primary" href={profile.resume}><span class="icon" set:html={ui.fileText} /> Résumé</a>
+        <a class="btn" href={`mailto:${profile.email}`}><span class="icon" set:html={ui.mail} /> Email</a>
+        <a class="btn square" href={profile.github} rel="me" aria-label="GitHub">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d={brands.github.path} fill="currentColor" /></svg>
+        </a>
+        <a class="btn" href={profile.linkedin} rel="me">LinkedIn <span class="icon" set:html={ui.arrowUpRight} /></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  // Characters in the order they sit on each flap drum.
+  const DRUM = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:-·›';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const canHover = matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+  class Cell {
+    cur = ' ';
+    target = ' ';
+    cycle = false;
+    speed = 60;
+    running = false;
+    waiters: (() => void)[] = [];
+    t: HTMLElement;
+    b: HTMLElement;
+    lt: HTMLElement;
+    lb: HTMLElement;
+
+    constructor(el: HTMLElement) {
+      const [top, bottom, leafTop, leafBottom] = Array.from(el.children) as HTMLElement[];
+      this.t = top.firstElementChild as HTMLElement;
+      this.b = bottom.firstElementChild as HTMLElement;
+      this.lt = leafTop;
+      this.lb = leafBottom;
+      this.cur = this.target = this.t.textContent || ' ';
+    }
+
+    set(ch: string) {
+      this.cur = this.target = ch;
+      this.t.textContent = ch;
+      this.b.textContent = ch;
+    }
+
+    to(ch: string, opts: { cycle?: boolean; speed?: number } = {}) {
+      this.target = ch;
+      this.cycle = !!opts.cycle && DRUM.includes(ch) && DRUM.includes(this.cur);
+      this.speed = opts.speed ?? 60;
+      if (reduce) {
+        this.set(ch);
+        return Promise.resolve();
+      }
+      const done = new Promise<void>((resolve) => this.waiters.push(resolve));
+      if (!this.running) this.run();
+      return done;
+    }
+
+    async run() {
+      this.running = true;
+      while (this.cur !== this.target) {
+        const next = this.cycle ? DRUM[(DRUM.indexOf(this.cur) + 1) % DRUM.length] : this.target;
+        await this.flip(next);
+      }
+      this.running = false;
+      this.waiters.splice(0).forEach((resolve) => resolve());
+    }
+
+    // One flip: the old top half falls away, then the new bottom half drops into place.
+    async flip(next: string) {
+      const d = this.speed;
+      (this.lt.firstElementChild as HTMLElement).textContent = this.cur;
+      (this.lb.firstElementChild as HTMLElement).textContent = next;
+      this.t.textContent = next;
+      this.lt.style.visibility = 'visible';
+      await this.lt.animate(
+        [
+          { transform: 'rotateX(0deg)' },
+          { transform: 'rotateX(-90deg)' },
+        ],
+        { duration: d, easing: 'cubic-bezier(.45,0,.9,.55)' }
+      ).finished;
+      this.lt.style.visibility = 'hidden';
+      this.lb.style.visibility = 'visible';
+      await this.lb.animate(
+        [
+          { transform: 'rotateX(90deg)' },
+          { transform: 'rotateX(0deg)' },
+        ],
+        { duration: d * 0.9, easing: 'cubic-bezier(.12,.62,.3,1)' }
+      ).finished;
+      this.b.textContent = next;
+      this.lb.style.visibility = 'hidden';
+      this.cur = next;
+    }
+  }
+
+  const board = document.querySelector<HTMLElement>('[data-board]');
+  if (board) {
+    const cellsOf = new Map<HTMLElement, Cell[]>();
+    board.querySelectorAll<HTMLElement>('[data-flaps]').forEach((g) => {
+      cellsOf.set(g, Array.from(g.querySelectorAll<HTMLElement>('.cell')).map((el) => new Cell(el)));
+    });
+
+    const write = (group: HTMLElement, text: string, stagger = 30, speed = 55) =>
+      Promise.all(cellsOf.get(group)!.map((c, i) =>
+        new Promise<void>((resolve) => setTimeout(() => c.to(text[i] ?? ' ', { speed }).then(resolve), i * stagger))
+      ));
+
+    const istTime = () =>
+      new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+
+    const clock = board.querySelector<HTMLElement>('[data-clock]')!;
+    const startClock = () => {
+      const tick = () => {
+        write(clock, istTime(), 40, 70);
+        setTimeout(tick, 60_000 - (Date.now() % 60_000) + 50);
+      };
+      setTimeout(tick, 60_000 - (Date.now() % 60_000) + 50);
+    };
+
+    const enableHover = () => {
+      if (!canHover) return;
+      board.querySelectorAll<HTMLElement>('[data-row]').forEach((row) => {
+        const st = row.querySelector<HTMLElement>('[data-status]')!;
+        const on = () => write(st, st.dataset.hover!, 24, 45);
+        const off = () => write(st, st.dataset.status!, 24, 45);
+        row.addEventListener('pointerenter', on);
+        row.addEventListener('pointerleave', off);
+        row.addEventListener('focus', on);
+        row.addEventListener('blur', off);
+      });
+    };
+
+    if (reduce) {
+      cellsOf.get(clock)!.forEach((c, i) => c.set(istTime()[i]));
+      startClock();
+      enableHover();
+    } else {
+      // Blank every flap, then let each one run through its drum to the final character,
+      // in a wave from the top-left corner of the board.
+      const intro = Array.from(cellsOf.keys()).filter((g) => g.hasAttribute('data-intro'));
+      intro.forEach((g) => cellsOf.get(g)!.forEach((c) => c.set(' ')));
+      document.documentElement.classList.remove('board-pending');
+
+      const fontsReady = Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1200))]);
+      fontsReady.then(() => {
+        const origin = board.getBoundingClientRect();
+        const runs: Promise<void>[] = [];
+        const queue = [...intro.map((g) => ({ g, text: g.dataset.final! })), { g: clock, text: istTime() }];
+
+        queue.forEach(({ g, text }) => {
+          const big = g.closest('.title') !== null;
+          cellsOf.get(g)!.forEach((c, i) => {
+            const target = text[i] ?? ' ';
+            if (target === ' ') return;
+            const box = c.t.parentElement!.getBoundingClientRect();
+            const delay = 140 + (box.top - origin.top) * 0.75 + (box.left - origin.left) * 0.32 + Math.random() * 60;
+            const steps = 2 + Math.floor(Math.random() * 4);
+            const idx = DRUM.indexOf(target);
+            const start = idx > 0 ? DRUM[(idx - steps + DRUM.length) % DRUM.length] : target;
+            const speed = big ? 66 : 50;
+            runs.push(
+              new Promise<void>((resolve) =>
+                setTimeout(async () => {
+                  await c.to(start, { speed });
+                  await c.to(target, { cycle: true, speed });
+                  resolve();
+                }, delay)
+              )
+            );
+          });
+        });
+
+        Promise.all(runs).then(() => {
+          startClock();
+          enableHover();
+        });
+      });
+    }
+  }
+</script>
+
+<style>
+  .wall {
+    --drop: clamp(2.75rem, 6vw, 5rem);
+    position: relative;
+    padding: var(--drop) var(--gutter) clamp(3rem, 6vw, 5rem);
+    background:
+      radial-gradient(70% 60% at 50% -10%, rgb(255 255 255 / 0.95), rgb(255 255 255 / 0) 70%),
+      linear-gradient(180deg, #ebe9e3 0%, #e8e5de 62%, #f4f3ef 88%, #ffffff 100%);
+    overflow: hidden;
+  }
+
+  .rig {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+    margin-inline: auto;
+  }
+
+  /* Two thin hanger rods, as if the board were suspended from the ceiling. */
+  .rod {
+    position: absolute;
+    bottom: calc(100% - 2px);
+    width: 2px;
+    height: calc(var(--drop) + 4rem);
+    background: linear-gradient(90deg, #a9a69d 0%, #dcd9d0 55%, #9f9c92 100%);
+  }
+
+  .rod::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    width: 14px;
+    height: 8px;
+    transform: translateX(-50%);
+    background: linear-gradient(180deg, #2a2a2d, #141416);
+    border-radius: 3px 3px 0 0;
+  }
+
+  .rod.left {
+    left: 15%;
+  }
+
+  .rod.right {
+    right: 15%;
+  }
+
+  .board {
+    --cell-base: clamp(12.5px, 2.02vw, 26px);
+    --cell: var(--cell-base);
+    position: relative;
+    padding: calc(var(--cell) * 1.15) calc(var(--cell) * 1.2) calc(var(--cell) * 1.25);
+    border-radius: calc(var(--cell) * 0.75);
+    background:
+      linear-gradient(180deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0) 30%),
+      linear-gradient(180deg, #161618 0%, #0c0c0e 100%);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.1),
+      inset 0 0 0 1px rgb(255 255 255 / 0.035),
+      0 2px 3px rgb(24 20 14 / 0.22),
+      0 34px 60px -20px rgb(24 20 14 / 0.48),
+      0 80px 120px -50px rgb(24 20 14 / 0.42);
+  }
+
+  .print {
+    font-family: var(--mono);
+    font-size: max(9px, calc(var(--cell-base) * 0.42));
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: rgb(241 239 232 / 0.48);
+    white-space: nowrap;
+  }
+
+  .strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: calc(var(--cell) * 0.95);
+  }
+
+  .clock {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--cell) * 0.5);
+  }
+
+  .title {
+    --cell: calc(var(--cell-base) * 2);
+    display: block;
+    line-height: 0;
+  }
+
+  .subtitle {
+    margin-top: calc(var(--cell) * 0.55);
+    line-height: 0;
+  }
+
+  .table {
+    display: grid;
+    grid-template-columns: repeat(5, auto);
+    justify-content: start;
+    column-gap: calc(var(--cell) * 0.62);
+    margin-top: calc(var(--cell) * 1.35);
+  }
+
+  .head,
+  .rows,
+  .rows li {
+    display: contents;
+  }
+
+  .head span {
+    padding-bottom: calc(var(--cell) * 0.45);
+  }
+
+  .row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: center;
+    padding-block: calc(var(--cell) * 0.13);
+    border-radius: calc(var(--cell) * 0.3);
+    text-decoration: none;
+    outline-offset: calc(var(--cell) * 0.25);
+  }
+
+  .row:focus-visible {
+    outline: 2px solid #f1efe8;
+  }
+
+  /* An indicator lamp per departure, lit in its line colour on hover or focus. */
+  .lamp {
+    width: calc(var(--cell) * 0.3);
+    height: calc(var(--cell) * 0.3);
+    border-radius: 50%;
+    background: #2b2b2f;
+    box-shadow: inset 0 1px 1px rgb(0 0 0 / 0.7);
+    transition: background-color 220ms var(--ease), box-shadow 220ms var(--ease);
+  }
+
+  .row:hover .lamp,
+  .row:focus-visible .lamp {
+    background: var(--lamp);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.12), 0 0 calc(var(--cell) * 0.7) var(--lamp);
+  }
+
+  @media (max-width: 40rem) {
+    .table {
+      grid-template-columns: repeat(4, auto);
+    }
+
+    .head .st,
+    .row :global(.st) {
+      display: none;
+    }
+  }
+
+  /* Intro under the board. Width 0 + min-width 100% so it never widens the rig. */
+  .intro {
+    width: 0;
+    min-width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--s5) var(--s6);
+    margin-top: clamp(2rem, 4vw, 3rem);
+  }
+
+  .intro p {
+    max-width: 36rem;
+    font-size: var(--t-lead);
+    line-height: 1.5;
+    color: var(--ink-2);
+    text-wrap: pretty;
+  }
+
+  .intro strong {
+    color: var(--ink);
+    font-weight: 620;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2);
+  }
+
+  .square {
+    width: 2.5rem;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .square svg {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+</style>

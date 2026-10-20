@@ -1,0 +1,141 @@
+---
+// A run of split-flap cells. Each cell has a fixed top and bottom half, plus two
+// hinged leaves that only show while a character is falling into place.
+// Rendered with the final text, so the board reads correctly without JavaScript.
+interface Props {
+  text: string;
+  n?: number;
+  tint?: string;
+  ink?: string;
+  class?: string;
+  [key: string]: unknown;
+}
+
+const { text, n, tint, ink, class: cls, ...rest } = Astro.props;
+const size = n ?? text.length;
+const chars = text.toUpperCase().padEnd(size, ' ').slice(0, size).split('');
+---
+<span class:list={['flaps', cls]} data-flaps data-final={chars.join('')} aria-hidden="true" {...rest}>
+  {chars.map((ch) => (
+    <span class:list={['cell', { tinted: tint }]} style={tint ? `--tint: ${tint}; --tint-ink: ${ink ?? '#fff'}` : undefined}>
+      <span class="half top"><b>{ch}</b></span>
+      <span class="half bottom"><b>{ch}</b></span>
+      <span class="leaf top"><b></b></span>
+      <span class="leaf bottom"><b></b></span>
+    </span>
+  ))}
+</span>
+
+<style>
+  .flaps {
+    --w: var(--cell, 24px);
+    --h: calc(var(--w) * 1.42);
+    --g: max(1.5px, calc(var(--w) * 0.1));
+    display: inline-flex;
+    gap: var(--g);
+  }
+
+  .cell {
+    position: relative;
+    flex: none;
+    width: var(--w);
+    height: var(--h);
+    perspective: calc(var(--h) * 5);
+    border-radius: calc(var(--w) * 0.12);
+    box-shadow: 0 calc(var(--w) * 0.06) calc(var(--w) * 0.1) rgb(0 0 0 / 0.55);
+  }
+
+  .half,
+  .leaf {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 50%;
+    overflow: hidden;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  .top {
+    top: 0;
+    border-radius: calc(var(--w) * 0.12) calc(var(--w) * 0.12) 0 0;
+    background: linear-gradient(180deg, #2a2a2e 0%, #212125 100%);
+    transform-origin: 50% 100%;
+  }
+
+  .bottom {
+    bottom: 0;
+    border-radius: 0 0 calc(var(--w) * 0.12) calc(var(--w) * 0.12);
+    background: linear-gradient(180deg, #1b1b1e 0%, #151517 100%);
+    transform-origin: 50% 0%;
+  }
+
+  /* The hinge: a hairline gap with a faint lip of light on the lower flap. */
+  .half.top::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: rgb(0 0 0 / 0.85);
+  }
+
+  .half.bottom::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 1px;
+    background: rgb(255 255 255 / 0.06);
+    z-index: 1;
+  }
+
+  .leaf {
+    visibility: hidden;
+    z-index: 2;
+  }
+
+  .cell.tinted .top {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--tint) 100%, white 10%) 0%, var(--tint) 100%);
+  }
+
+  .cell.tinted .bottom {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--tint) 88%, black) 0%, color-mix(in srgb, var(--tint) 80%, black) 100%);
+  }
+
+  b {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: calc(var(--h));
+    display: grid;
+    place-items: center;
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: calc(var(--h) * 0.6);
+    line-height: 1;
+    letter-spacing: -0.01em;
+    color: #f1efe8;
+    font-variant-numeric: tabular-nums;
+    white-space: pre;
+  }
+
+  .cell.tinted b {
+    color: var(--tint-ink);
+  }
+
+  .top b {
+    top: 0;
+  }
+
+  .bottom b {
+    bottom: 0;
+  }
+
+  /* Before the board script runs, show blank flaps rather than flashing the final text. */
+  :global(html.board-pending) .flaps b {
+    visibility: hidden;
+  }
+</style>

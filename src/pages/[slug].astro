@@ -106,7 +106,7 @@ const Fig = figures[c.figure.id as keyof typeof figures];
         {meta.metrics.map((m) => (
           <div>
             <dt>{m.label}</dt>
-            <dd data-count>{m.value}</dd>
+            <dd>{m.value}</dd>
           </div>
         ))}
       </dl>
@@ -118,25 +118,25 @@ const Fig = figures[c.figure.id as keyof typeof figures];
       </Figure>
 
       {meta.image && (
-        <figure class="shot" data-reveal>
+        <figure class="shot">
           <img src={meta.image.src} alt={meta.image.alt} width={meta.image.width} height={meta.image.height} loading="lazy" decoding="async" />
           <figcaption>{meta.image.caption}</figcaption>
         </figure>
       )}
 
       <div class="case-body">
-        <section aria-labelledby="s-problem" data-reveal>
+        <section aria-labelledby="s-problem">
           <h2 id="s-problem">Why it’s hard</h2>
           <div class="prose">{c.problem.map((p) => <p set:html={inline(p)} />)}</div>
         </section>
 
-        <section aria-labelledby="s-how" data-reveal>
+        <section aria-labelledby="s-how">
           <h2 id="s-how">How it holds</h2>
           <div class="prose">{c.how.map((p) => <p set:html={inline(p)} />)}</div>
         </section>
 
         {c.decisions && (
-          <section aria-labelledby="s-decisions" data-reveal>
+          <section aria-labelledby="s-decisions">
             <h2 id="s-decisions">Decisions</h2>
             <ol class="decisions">
               {c.decisions.map((d, k) => (
@@ -152,7 +152,7 @@ const Fig = figures[c.figure.id as keyof typeof figures];
           </section>
         )}
 
-        <section aria-labelledby="s-evidence" data-reveal>
+        <section aria-labelledby="s-evidence">
           <h2 id="s-evidence">Evidence</h2>
           <div>
             <table class="results">
@@ -170,7 +170,7 @@ const Fig = figures[c.figure.id as keyof typeof figures];
           </div>
         </section>
 
-        <section class="limits" aria-labelledby="s-limits" data-reveal>
+        <section class="limits" aria-labelledby="s-limits">
           <h2 id="s-limits">Where it stops holding</h2>
           <ul>{c.limits.map((l) => <li set:html={inline(l)} />)}</ul>
         </section>

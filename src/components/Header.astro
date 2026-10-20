@@ -1,0 +1,540 @@
+---
+// The header is the route display above a train door: the page's sections are
+// stations on one line, and the line fills in as you travel down the page.
+import { profile } from '../data/content';
+import { brands, ui } from '../lib/icons';
+
+const sections = [
+  { id: 'departures', label: 'Departures' },
+  { id: 'network', label: 'Network' },
+  { id: 'work', label: 'Work' },
+  { id: 'route', label: 'About' },
+  { id: 'toolkit', label: 'Toolkit' },
+  { id: 'contact', label: 'Contact' },
+];
+
+const isHome = Astro.url.pathname === '/';
+// Off the home page every case study belongs to Work.
+const fixed = isHome ? 0 : sections.findIndex((s) => s.id === 'work');
+const href = (id: string) => (isHome ? `#${id}` : `/#${id}`);
+const state = (i: number) => (i < fixed ? 'passed' : i === fixed ? 'current' : 'ahead');
+const segFill = (i: number) => (i < fixed ? 1 : 0);
+---
+<header class="site-header" data-header data-home={isHome ? '' : undefined}>
+  <div class="wrap bar">
+    <a class="brand" href="/">{profile.name}</a>
+
+    <nav class="route" aria-label="Sections">
+      <ol>
+        {sections.map((s, i) => (
+          <li class="stop" data-station={s.id} data-state={state(i)}>
+            <a href={href(s.id)} aria-current={i === fixed ? 'location' : undefined}>
+              <span class="dot" aria-hidden="true"></span>
+              <span class="name">{s.label}</span>
+            </a>
+            {i < sections.length - 1 && (
+              <span class="rail" aria-hidden="true"><i style={`--p: ${segFill(i)}`}></i></span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+
+    <a class="btn resume" href={profile.resume}>
+      <span class="icon" set:html={ui.fileText} />
+      Résumé
+    </a>
+
+    <button class="pill" type="button" aria-expanded="false" aria-controls="route-sheet" data-menu-open>
+      <span class="pill-dot" aria-hidden="true"></span>
+      <span class="pill-here" data-here>{sections[fixed].label}</span>
+      <span class="pill-rule" aria-hidden="true"></span>
+      <span class="pill-menu">Menu</span>
+    </button>
+  </div>
+</header>
+
+<div class="sheet" id="route-sheet" role="dialog" aria-modal="true" aria-label="Sections" data-sheet hidden>
+  <div class="wrap sheet-top">
+    <a class="brand" href="/">{profile.name}</a>
+    <button class="btn" type="button" data-menu-close>Close</button>
+  </div>
+
+  <nav class="wrap sheet-route" aria-label="Sections">
+    <ol>
+      {sections.map((s, i) => (
+        <li data-station={s.id} data-state={state(i)}>
+          <a href={href(s.id)} aria-current={i === fixed ? 'location' : undefined}>
+            <span class="dot" aria-hidden="true"></span>
+            <span class="big">{s.label}</span>
+            <span class="here mono">You are here</span>
+          </a>
+        </li>
+      ))}
+    </ol>
+  </nav>
+
+  <div class="wrap sheet-foot">
+    <a class="btn primary" href={profile.resume}><span class="icon" set:html={ui.fileText} /> Résumé</a>
+    <a class="btn" href={`mailto:${profile.email}`}><span class="icon" set:html={ui.mail} /> Email</a>
+    <a class="btn" href={profile.github} rel="me">
+      <svg class="gh" viewBox="0 0 24 24" aria-hidden="true"><path d={brands.github.path} fill="currentColor" /></svg>
+      GitHub
+    </a>
+    <a class="btn" href={profile.linkedin} rel="me">LinkedIn <span class="icon" set:html={ui.arrowUpRight} /></a>
+  </div>
+</div>
+
+<script>
+  const header = document.querySelector<HTMLElement>('[data-header]')!;
+  const sheet = document.querySelector<HTMLElement>('[data-sheet]')!;
+  const openBtn = header.querySelector<HTMLButtonElement>('[data-menu-open]')!;
+  const closeBtn = sheet.querySelector<HTMLButtonElement>('[data-menu-close]')!;
+  const here = header.querySelector<HTMLElement>('[data-here]')!;
+  const stops = Array.from(document.querySelectorAll<HTMLElement>('[data-station]'));
+  const segs = Array.from(header.querySelectorAll<HTMLElement>('.rail i'));
+  const ids = Array.from(header.querySelectorAll<HTMLElement>('.stop')).map((s) => s.dataset.station!);
+  const labels = Array.from(header.querySelectorAll<HTMLElement>('.stop .name')).map((n) => n.textContent!);
+
+  // The header gains a hairline once the page has moved.
+  let ruled = false;
+  const rule = () => {
+    const on = window.scrollY > 8;
+    if (on !== ruled) {
+      ruled = on;
+      header.classList.toggle('scrolled', on);
+    }
+  };
+
+  // Home page: work out which section you're in and how far along to the next one.
+  // Section positions are measured once and again only when the layout changes,
+  // so scrolling never forces a layout read.
+  let update = () => rule();
+  if (header.hasAttribute('data-home')) {
+    const sections = ids.map((id) => document.getElementById(id));
+    let tops: number[] = [];
+    let docHeight = 0;
+    let last = -1;
+
+    const measure = () => {
+      tops = sections.map((s) => (s ? s.getBoundingClientRect().top + window.scrollY : Infinity));
+      docHeight = document.documentElement.scrollHeight;
+    };
+
+    update = () => {
+      rule();
+      const probe = window.scrollY + window.innerHeight * 0.38;
+      let i = 0;
+      tops.forEach((t, k) => {
+        if (t <= probe) i = k;
+      });
+      const atEnd = window.innerHeight + window.scrollY >= docHeight - 4;
+      if (atEnd) i = ids.length - 1;
+      const span = (tops[i + 1] ?? Infinity) - tops[i];
+      const f = atEnd ? 1 : Math.min(1, Math.max(0, (probe - tops[i]) / span));
+
+      segs.forEach((seg, k) => seg.style.setProperty('--p', String(k < i ? 1 : k === i ? f : 0)));
+      if (i !== last) {
+        last = i;
+        stops.forEach((stop) => {
+          const k = ids.indexOf(stop.dataset.station!);
+          stop.dataset.state = k < i ? 'passed' : k === i ? 'current' : 'ahead';
+          const link = stop.querySelector('a')!;
+          if (k === i) link.setAttribute('aria-current', 'location');
+          else link.removeAttribute('aria-current');
+        });
+        here.textContent = labels[i];
+      }
+    };
+
+    measure();
+    new ResizeObserver(() => {
+      measure();
+      update();
+    }).observe(document.body);
+  }
+
+  let frame = 0;
+  addEventListener('scroll', () => {
+    if (!frame) frame = requestAnimationFrame(() => {
+      frame = 0;
+      update();
+    });
+  }, { passive: true });
+  update();
+
+  // Phone menu: a full-screen vertical route map.
+  const lenis = () => window.__lenis;
+
+  const open = () => {
+    lenis()?.stop();
+    sheet.hidden = false;
+    requestAnimationFrame(() => sheet.classList.add('open'));
+    openBtn.setAttribute('aria-expanded', 'true');
+    document.documentElement.classList.add('sheet-open');
+    closeBtn.focus();
+  };
+
+  const close = (restoreFocus = true) => {
+    sheet.classList.remove('open');
+    openBtn.setAttribute('aria-expanded', 'false');
+    document.documentElement.classList.remove('sheet-open');
+    lenis()?.start();
+    setTimeout(() => (sheet.hidden = true), 180);
+    if (restoreFocus) openBtn.focus();
+  };
+
+  openBtn.addEventListener('click', open);
+  closeBtn.addEventListener('click', () => close());
+  sheet.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => close(false)));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !sheet.hidden) close();
+  });
+</script>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: rgb(255 255 255 / 0.97);
+    border-bottom: 1px solid transparent;
+    transition: border-color 200ms var(--ease);
+  }
+
+  .site-header:global(.scrolled) {
+    border-bottom-color: var(--rule);
+  }
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: clamp(1rem, 3vw, 2.5rem);
+    min-height: 4rem;
+  }
+
+  .brand {
+    flex: none;
+    font-weight: 650;
+    font-size: 1.02rem;
+    letter-spacing: -0.025em;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  /* Route ---------------------------------------------------------- */
+
+  .route {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .route ol {
+    display: flex;
+    align-items: center;
+    width: min(100%, 46rem);
+  }
+
+  .stop {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .stop:last-child {
+    flex: none;
+  }
+
+  .stop a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.15rem;
+    font-size: 0.84rem;
+    font-weight: 500;
+    color: var(--ink-3);
+    text-decoration: none;
+    white-space: nowrap;
+    transition: color 160ms var(--ease);
+  }
+
+  .dot {
+    flex: none;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background: #fff;
+    border: 2px solid var(--rule-strong);
+    transition: border-color 200ms var(--ease), background-color 200ms var(--ease), box-shadow 200ms var(--ease), transform 200ms var(--ease);
+  }
+
+  .rail {
+    position: relative;
+    flex: 1;
+    min-width: 0.75rem;
+    height: 2px;
+    margin-inline: 0.6rem;
+    border-radius: 1px;
+    background: var(--rule);
+    overflow: hidden;
+  }
+
+  .rail i {
+    position: absolute;
+    inset: 0;
+    background: var(--ink);
+    transform-origin: left center;
+    transform: scaleX(var(--p, 0));
+  }
+
+  .stop[data-state='passed'] a {
+    color: var(--ink-2);
+  }
+
+  .stop[data-state='passed'] .dot {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .stop[data-state='current'] a {
+    color: var(--ink);
+    font-weight: 620;
+  }
+
+  .stop[data-state='current'] .dot {
+    border: 2.5px solid var(--ink);
+    transform: scale(1.25);
+    box-shadow: 0 0 0 4px rgb(14 14 16 / 0.07);
+  }
+
+  .stop a:hover {
+    color: var(--ink);
+  }
+
+  .stop a:hover .dot {
+    border-color: var(--ink);
+  }
+
+  .stop a:focus-visible {
+    outline-offset: 2px;
+  }
+
+  .resume {
+    flex: none;
+    min-height: 2.25rem;
+    padding: 0.5rem 0.85rem;
+  }
+
+  /* Phone pill ----------------------------------------------------- */
+
+  .pill {
+    display: none;
+    flex: none;
+    align-items: center;
+    gap: 0.55rem;
+    margin-left: auto;
+    min-height: 2.4rem;
+    padding: 0.4rem 0.95rem 0.4rem 0.8rem;
+    font: 520 0.88rem/1 var(--sans);
+    color: var(--ink);
+    background: var(--paper);
+    border: 1px solid var(--rule-strong);
+    border-radius: 999px;
+    cursor: pointer;
+  }
+
+  .pill-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    border: 2.5px solid var(--ink);
+  }
+
+  .pill-rule {
+    width: 1px;
+    height: 0.9rem;
+    background: var(--rule-strong);
+  }
+
+  .pill-menu {
+    color: var(--ink-2);
+  }
+
+  /* Labels give way first, then the whole route. */
+  @media (max-width: 68rem) {
+    .stop:not([data-state='current']) .name {
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translate(-50%, -0.2rem);
+      padding: 0.3rem 0.55rem;
+      font-size: 0.76rem;
+      color: var(--ink);
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 140ms var(--ease);
+    }
+
+    .stop a {
+      position: relative;
+    }
+
+    .stop a:hover .name,
+    .stop a:focus-visible .name {
+      opacity: 1;
+    }
+  }
+
+  @media (max-width: 48rem) {
+    .route,
+    .resume {
+      display: none;
+    }
+
+    .pill {
+      display: inline-flex;
+    }
+  }
+
+  /* Sheet ---------------------------------------------------------- */
+
+  .sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    background: var(--paper);
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity 180ms var(--ease), transform 180ms var(--ease);
+    overflow-y: auto;
+  }
+
+  .sheet:global(.open) {
+    opacity: 1;
+    transform: none;
+  }
+
+  .sheet[hidden] {
+    display: none;
+  }
+
+  /* Grid items with auto margins shrink to their content; keep each band full width. */
+  .sheet > .wrap {
+    width: 100%;
+  }
+
+  .sheet-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 4rem;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .sheet-route {
+    align-self: center;
+    padding-block: var(--s6);
+  }
+
+  .sheet-route li {
+    position: relative;
+  }
+
+  .sheet-route li:not(:last-child)::before {
+    content: '';
+    position: absolute;
+    left: calc(0.6rem - 2px);
+    top: calc(50% + 0.75rem);
+    height: calc(100% - 1.5rem);
+    width: 4px;
+    border-radius: 2px;
+    background: var(--rule);
+  }
+
+  .sheet-route li[data-state='passed']::before {
+    background: var(--ink);
+  }
+
+  .sheet-route a {
+    display: grid;
+    grid-template-columns: 1.2rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--s4);
+    padding-block: 0.7rem;
+    text-decoration: none;
+    color: var(--ink-3);
+  }
+
+  .sheet-route .dot {
+    width: 1.2rem;
+    height: 1.2rem;
+    border-width: 3.5px;
+  }
+
+  .big {
+    font-size: clamp(1.8rem, 1.2rem + 3vw, 2.4rem);
+    font-weight: 640;
+    letter-spacing: -0.035em;
+    line-height: 1.1;
+  }
+
+  .here {
+    display: none;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    background: var(--paper-2);
+    color: var(--ink-2);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .sheet-route li[data-state='passed'] a {
+    color: var(--ink-2);
+  }
+
+  .sheet-route li[data-state='passed'] .dot {
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .sheet-route li[data-state='current'] a {
+    color: var(--ink);
+  }
+
+  .sheet-route li[data-state='current'] .dot {
+    border-color: var(--ink);
+    box-shadow: 0 0 0 5px rgb(14 14 16 / 0.07);
+  }
+
+  .sheet-route li[data-state='current'] .here {
+    display: inline-block;
+  }
+
+  .sheet-foot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s2);
+    padding-block: var(--s5) var(--s6);
+    border-top: 1px solid var(--rule);
+  }
+
+  .gh {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  :global(html.sheet-open) {
+    overflow: hidden;
+  }
+</style>

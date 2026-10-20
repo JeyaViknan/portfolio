@@ -139,11 +139,41 @@ const allLines = Object.values(lines);
   </div>
 </div>
 
+<script is:inline>
+  // If the map script never runs, show the map rather than leave it blank.
+  setTimeout(function () {
+    if (!window.__mapReady) document.querySelectorAll('[data-map]').forEach(function (m) { m.classList.add('ready'); });
+  }, 4000);
+</script>
+
 <script>
-  import { gsap } from 'gsap';
+  declare global {
+    interface Window {
+      __mapReady?: boolean;
+    }
+  }
+  window.__mapReady = true;
 
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const canHover = matchMedia('(hover: hover)').matches;
+
+  // The draw easing, evaluated here too so each station can light up at the
+  // moment the line reaches it.
+  const EASE: [number, number, number, number] = [0.65, 0, 0.35, 1];
+  const bez = (t: number, p1: number, p2: number) => 3 * (1 - t) * (1 - t) * t * p1 + 3 * (1 - t) * t * t * p2 + t * t * t;
+  const solve = (fn: (t: number) => number, target: number) => {
+    let lo = 0;
+    let hi = 1;
+    for (let k = 0; k < 28; k++) {
+      const mid = (lo + hi) / 2;
+      if (fn(mid) < target) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  };
+  // Distance covered (0..1) at time fraction x, and its inverse.
+  const progressAt = (x: number) => bez(solve((t) => bez(t, EASE[0], EASE[2]), x), EASE[1], EASE[3]);
+  const timeFor = (f: number) => solve(progressAt, f);
 
   document.querySelectorAll<HTMLElement>('[data-network]').forEach((root) => {
     const frame = root.querySelector<HTMLElement>('[data-frame]')!;
@@ -153,55 +183,52 @@ const allLines = Object.values(lines);
     const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>('[data-focus]'));
     let pinned: string | null = null;
 
-    // Draw the visible map in. Each line draws from its first stop, and every
-    // station lights up at the moment its line actually reaches it.
+    // Draw the visible map in when it scrolls into view.
     const visible = maps.find((m) => getComputedStyle(m).display !== 'none');
     maps.filter((m) => m !== visible || reduce).forEach((m) => m.classList.add('ready'));
     if (visible && !reduce) {
-      const timeline = intro(visible);
+      const animations = intro(visible);
       new IntersectionObserver((entries, io) => {
         if (entries[0].isIntersecting) {
-          timeline.play();
+          animations.forEach((a) => a.play());
           io.disconnect();
         }
       }, { threshold: 0.15 }).observe(visible);
     }
 
+    // Every animation is created paused with a backwards fill, so the map holds
+    // its starting state (no lines, no stations) until it is played.
     function intro(svg: SVGSVGElement) {
       const NS = 'http://www.w3.org/2000/svg';
-      const EASE = 'power3.inOut';
-      const DRAW = 1.7;
-      const STAGGER = 0.2;
-      const ease = gsap.parseEase(EASE);
-      // Time t at which the eased draw has covered fraction f of the line.
-      const timeFor = (f: number) => {
-        let lo = 0;
-        let hi = 1;
-        for (let k = 0; k < 24; k++) {
-          const mid = (lo + hi) / 2;
-          if (ease(mid) < f) lo = mid;
-          else hi = mid;
-        }
-        return (lo + hi) / 2;
+      const DRAW = 1700;
+      const STAGGER = 200;
+      const LEAD = 100;
+      const anims: Animation[] = [];
+      const add = (a: Animation) => {
+        a.pause();
+        anims.push(a);
+        return a;
       };
 
-      const tl = gsap.timeline({ paused: true, delay: 0.1 });
       const paths = Array.from(svg.querySelectorAll<SVGPathElement>('.line:not(.extension)'));
       const info = new Map<string, { start: number; pts: DOMPoint[] }>();
       paths.forEach((p, i) => {
         const len = p.getTotalLength();
-        const pts = Array.from({ length: 241 }, (_, k) => p.getPointAtLength((len * k) / 240));
-        info.set(p.dataset.line!, { start: i * STAGGER, pts });
-        p.style.strokeDasharray = `${len}`;
-        p.style.strokeDashoffset = `${len}`;
-        tl.to(p, { strokeDashoffset: 0, duration: DRAW, ease: EASE }, i * STAGGER);
+        const start = LEAD + i * STAGGER;
+        info.set(p.dataset.line!, { start, pts: Array.from({ length: 241 }, (_, k) => p.getPointAtLength((len * k) / 240)) });
+        add(p.animate(
+          [
+            { strokeDasharray: `${len}`, strokeDashoffset: `${len}` },
+            { strokeDasharray: `${len}`, strokeDashoffset: '0' },
+          ],
+          { duration: DRAW, delay: start, easing: `cubic-bezier(${EASE.join(',')})`, fill: 'backwards' }
+        ));
       });
 
       const product = info.get('product');
-      const extensionAt = product ? product.start + DRAW - 0.15 : DRAW;
+      const extensionAt = product ? product.start + DRAW - 150 : DRAW;
       svg.querySelectorAll<SVGPathElement>('.extension').forEach((e) => {
-        gsap.set(e, { opacity: 0 });
-        tl.to(e, { opacity: 1, duration: 0.9, ease: 'power1.out' }, extensionAt);
+        add(e.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 900, delay: extensionAt, easing: 'ease-out', fill: 'backwards' }));
       });
 
       svg.querySelectorAll<SVGAElement>('.station').forEach((st) => {
@@ -210,53 +237,50 @@ const allLines = Object.values(lines);
         const cx = Number(dot.getAttribute('cx'));
         const cy = Number(dot.getAttribute('cy'));
         const r = Number(dot.getAttribute('r'));
+        const future = st.classList.contains('future');
 
-        let at = Infinity;
-        if (st.classList.contains('future')) at = extensionAt + 0.6;
-        for (const id of st.dataset.lines!.split(' ')) {
-          const line = info.get(id);
-          if (!line || st.classList.contains('future')) continue;
-          let best = 0;
-          let bestD = Infinity;
-          line.pts.forEach((pt, k) => {
-            const d = (pt.x - cx) ** 2 + (pt.y - cy) ** 2;
-            if (d < bestD) {
-              bestD = d;
-              best = k;
-            }
-          });
-          at = Math.min(at, line.start + timeFor(best / 240) * DRAW);
+        let at = future ? extensionAt + 600 : Infinity;
+        if (!future) {
+          for (const id of st.dataset.lines!.split(' ')) {
+            const line = info.get(id);
+            if (!line) continue;
+            let best = 0;
+            let bestD = Infinity;
+            line.pts.forEach((pt, k) => {
+              const d = (pt.x - cx) ** 2 + (pt.y - cy) ** 2;
+              if (d < bestD) {
+                bestD = d;
+                best = k;
+              }
+            });
+            at = Math.min(at, line.start + timeFor(best / 240) * DRAW);
+          }
         }
 
-        gsap.set(dot, { attr: { r: 0 } });
-        gsap.set(name, { opacity: 0 });
-        tl.to(dot, { attr: { r }, duration: 0.7, ease: 'expo.out' }, at);
-        tl.to(name, { opacity: 1, duration: 0.8, ease: 'power2.out' }, at + 0.12);
+        add(dot.animate([{ transform: 'scale(0)' }, { transform: 'scale(1)' }], { duration: 700, delay: at, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'backwards' }));
+        add(name.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, delay: at + 120, easing: 'ease-out', fill: 'backwards' }));
 
-        if (!st.classList.contains('future')) {
+        if (!future) {
           const halo = document.createElementNS(NS, 'circle');
           halo.setAttribute('class', 'halo');
           halo.setAttribute('cx', String(cx));
           halo.setAttribute('cy', String(cy));
-          halo.setAttribute('stroke', dot.getAttribute('stroke') ?? '#0e0e10');
           halo.setAttribute('r', String(r));
-          halo.setAttribute('opacity', '0');
+          halo.setAttribute('stroke', dot.getAttribute('stroke') ?? '#0e0e10');
           st.insertBefore(halo, dot);
-          tl.fromTo(
-            halo,
-            { attr: { r }, opacity: 0.5 },
-            { attr: { r: r + 18 }, opacity: 0, duration: 1.2, ease: 'power2.out', immediateRender: false, onComplete: () => halo.remove() },
-            at
-          );
+          const ripple = add(halo.animate(
+            [
+              { transform: 'scale(1)', opacity: 0.5 },
+              { transform: `scale(${(r + 18) / r})`, opacity: 0 },
+            ],
+            { duration: 1200, delay: at, easing: 'cubic-bezier(.33,1,.68,1)', fill: 'forwards' }
+          ));
+          ripple.finished.then(() => halo.remove(), () => halo.remove());
         }
       });
 
-      tl.add(() => paths.forEach((p) => {
-        p.style.strokeDasharray = '';
-        p.style.strokeDashoffset = '';
-      }));
       svg.classList.add('ready');
-      return tl;
+      return anims;
     }
 
     function focusLine(id: string | null) {
@@ -381,15 +405,20 @@ const allLines = Object.values(lines);
   }
 
   /* Until the intro has set its starting state, keep the map from flashing in. */
-  :global(html.motion) .map:not(:global(.ready)) .lines,
-  :global(html.motion) .map:not(:global(.ready)) .stations {
-    opacity: 0;
+  @media (prefers-reduced-motion: no-preference) {
+    :global(html.js) .map:not(:global(.ready)) .lines,
+    :global(html.js) .map:not(:global(.ready)) .stations {
+      opacity: 0;
+    }
   }
 
   .stations :global(.halo) {
     fill: none;
     stroke-width: 2;
     pointer-events: none;
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
   }
 
   .hit {
