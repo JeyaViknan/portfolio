@@ -4,4 +4,6 @@ import { defineConfig } from 'astro/config';
 export default defineConfig({
   site: process.env.SITE_URL || undefined,
   trailingSlash: 'always',
+  // Styles ship inside each page, so a CDN can never serve a page without its CSS.
+  build: { inlineStylesheets: 'always' },
 });
